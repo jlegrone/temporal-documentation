@@ -296,32 +296,56 @@ export function calculateResult(state) {
     return { success: false, runtimeMS: 0, attempts: 0, reason: "No retries" };
   }
 
+  // Pre-compute per-entry numeric snapshots so the hot loop does only arithmetic.
+  // Default to 1 attempt only when neither count nor period is configured;
+  // a missing limit becomes Infinity so the per-iteration check stays uniform.
+  const entries = state.retries.map((r) => {
+    const periodMS = r.period instanceof Duration ? r.period.toMilliseconds() : null;
+    return {
+      runtimeMS: r.runtime.toMilliseconds(),
+      success: r.success,
+      countLimit: r.count ?? (periodMS != null ? Infinity : 1),
+      periodLimitMS: periodMS ?? Infinity,
+    };
+  });
+
   // If the configured chain ends in a failure (or in a success that would be
   // killed by startToCloseTimeout — Temporal treats that as a per-attempt
   // timeout, not a successful run), the user is implicitly saying "and it
   // would keep going this way." Project additional attempts with the last
   // configured runtime until something terminates the chain.
-  const lastConfigured = state.retries[state.retries.length - 1];
-  const lastConfiguredRuntimeMS = lastConfigured.runtime.toMilliseconds();
+  const lastConfigured = entries[entries.length - 1];
   const lastWouldTimeOut =
-    startToCloseTimeout > 0 && lastConfiguredRuntimeMS >= startToCloseTimeout;
+    startToCloseTimeout > 0 && lastConfigured.runtimeMS >= startToCloseTimeout;
   const lastWouldFail = !lastConfigured.success || lastWouldTimeOut;
-  const projectedRuntimeMS = lastWouldFail ? lastConfiguredRuntimeMS : null;
+  const projectedRuntimeMS = lastWouldFail ? lastConfigured.runtimeMS : null;
 
-  // Detect the open-ended infinite case up front so we don't spin in the
-  // projection loop below. With no maximumAttempts and no scheduleToCloseTimeout,
-  // a perpetually failing chain (whether by per-attempt timeout or otherwise)
-  // would keep retrying forever.
+  // Detect open-ended infinite cases up front to avoid spinning in the loop:
+  //   1. No maximumAttempts AND no scheduleToCloseTimeout — classic infinite retry.
+  //   2. The projection's per-iteration wall-clock cost is zero (zero per-attempt
+  //      elapsed time AND zero retry interval growth potential), so totalRuntimeMS
+  //      can never reach scheduleToCloseTimeout no matter how big the cap is.
   if (projectedRuntimeMS != null) {
-    if (maximumAttempts === 0 && scheduleToCloseTimeout === 0) {
+    const projectedAttemptElapsed =
+      startToCloseTimeout > 0
+        ? Math.min(projectedRuntimeMS, startToCloseTimeout)
+        : projectedRuntimeMS;
+    const projectedIntervalCap =
+      maximumInterval > 0 ? maximumInterval : initialInterval;
+    const noProgress = projectedAttemptElapsed === 0 && projectedIntervalCap === 0;
+    if (
+      maximumAttempts === 0 &&
+      (scheduleToCloseTimeout === 0 || noProgress)
+    ) {
       return { success: null, runtimeMS: 0, attempts: Infinity, reason: "neverTerminates" };
     }
   }
 
-  // Hard cap to defend against pathological configs that slip past the
-  // neverTerminates check (e.g. astronomical scheduleToCloseTimeout). At that
-  // point reporting "neverTerminates" is more honest than running forever.
-  const PROJECTION_GUARD = 1_000_000;
+  // Hard iteration cap so a degenerate config (e.g. period=24h with zero
+  // per-iteration progress) can't lock up the page. Reaching this cap means
+  // the simulation hasn't converged in a reasonable bound; reporting
+  // neverTerminates is more honest than continuing.
+  const ITERATION_GUARD = 1_000_000;
 
   let retryIntervalMS = initialInterval;
   let totalRuntimeMS = 0;
@@ -334,16 +358,15 @@ export function calculateResult(state) {
   let entryAttemptsUsed = 0;
   let entryElapsedMS = 0;
 
-  for (let i = 0; ; ++i) {
+  for (let i = 0; i < ITERATION_GUARD; ++i) {
     let currentRetryRuntime;
     let isSuccess;
-    if (entryIndex < state.retries.length) {
-      const entry = state.retries[entryIndex];
-      currentRetryRuntime = entry.runtime.toMilliseconds();
+    if (entryIndex < entries.length) {
+      const entry = entries[entryIndex];
+      currentRetryRuntime = entry.runtimeMS;
       isSuccess = entry.success;
     } else {
-      // Beyond the configured chain — project further failures.
-      if (projectedRuntimeMS == null || i >= state.retries.length + PROJECTION_GUARD) {
+      if (projectedRuntimeMS == null) {
         return { success: null, runtimeMS: totalRuntimeMS, attempts: Infinity, reason: "neverTerminates" };
       }
       currentRetryRuntime = projectedRuntimeMS;
@@ -391,19 +414,17 @@ export function calculateResult(state) {
     }
 
     // Advance to the next configured entry once the active one is exhausted.
-    if (entryIndex < state.retries.length) {
-      const entry = state.retries[entryIndex];
-      const periodMS = entry.period?.toMilliseconds();
-      // Default to 1 attempt only when neither count nor period is configured.
-      const countLimit = entry.count ?? (periodMS != null ? Infinity : 1);
-      const periodLimitMS = periodMS ?? Infinity;
-      if (entryAttemptsUsed >= countLimit || entryElapsedMS >= periodLimitMS) {
+    if (entryIndex < entries.length) {
+      const entry = entries[entryIndex];
+      if (entryAttemptsUsed >= entry.countLimit || entryElapsedMS >= entry.periodLimitMS) {
         entryIndex += 1;
         entryAttemptsUsed = 0;
         entryElapsedMS = 0;
       }
     }
   }
+  // Hit the iteration guard — the simulation isn't converging.
+  return { success: null, runtimeMS: totalRuntimeMS, attempts: Infinity, reason: "neverTerminates" };
 }
 
 export function decodeStateFromParams(search) {
