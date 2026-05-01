@@ -203,18 +203,12 @@ export default function RetrySimulator() {
   );
 
   useEffect(function loadStateFromUrl() {
-    if (typeof window === "undefined") {
-      return;
-    }
     setState(decodeStateFromParams(window.location.search));
   }, []);
 
   useEffect(function persistStateToUrl() {
-    if (typeof window === "undefined") {
-      return;
-    }
-    // Skip the first run so we don't clobber URL params before
-    // loadStateFromUrl's setState has been applied.
+    // Skip the first run so we don't briefly clobber the URL with
+    // empty params before loadStateFromUrl's setState has been applied.
     if (!hasHydratedFromUrl.current) {
       hasHydratedFromUrl.current = true;
       return;
