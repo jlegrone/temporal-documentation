@@ -27,7 +27,7 @@ export const UNIT_LABELS = {
 
 /**
  * Render a millisecond value with the largest natural unit (ms, s, m, h)
- * and at most two fractional digits. e.g. 5100 → "5.1 s", 90000 → "1.5 m".
+ * and at most two fractional digits. e.g. 5100 → "5.1s", 90000 → "1.5m".
  */
 export function formatDurationHuman(ms) {
   if (!Number.isFinite(ms)) return String(ms);
@@ -36,6 +36,32 @@ export function formatDurationHuman(ms) {
   if (Math.abs(ms) < 60_000) return `${round(ms / 1000)}s`;
   if (Math.abs(ms) < 3_600_000) return `${round(ms / 60_000)}m`;
   return `${round(ms / 3_600_000)}h`;
+}
+
+/**
+ * Render a millisecond value as long-form English with the two most
+ * significant non-zero units. e.g. 150000 → "2 minutes 30 seconds".
+ */
+export function formatDurationLong(ms) {
+  if (!Number.isFinite(ms)) return String(ms);
+  if (ms === 0) return "0 seconds";
+  const negative = ms < 0;
+  let remaining = Math.abs(ms);
+  const units = [
+    { ms: 3_600_000, name: "hour" },
+    { ms: 60_000, name: "minute" },
+    { ms: 1_000, name: "second" },
+    { ms: 1, name: "millisecond" },
+  ];
+  const parts = [];
+  for (const u of units) {
+    if (parts.length >= 2) break;
+    const count = Math.floor(remaining / u.ms);
+    if (count === 0) continue;
+    parts.push(`${count} ${u.name}${count === 1 ? "" : "s"}`);
+    remaining -= count * u.ms;
+  }
+  return (negative ? "-" : "") + parts.join(" ");
 }
 
 const DEFAULT_DURATION_UNIT = "s";
@@ -78,7 +104,7 @@ export class Duration {
 
   /**
    * Returns a new Duration with the same numeric value but a different unit.
-   * The total milliseconds change — switching "1 s" to hours yields "1 h".
+   * The total milliseconds change — switching "1s" to hours yields "1h".
    */
   withUnit(unit) {
     return new Duration(this.value, unit);
@@ -211,27 +237,6 @@ function decodeRetries(raw) {
   return retries.length > 0 ? retries : null;
 }
 
-function retriesEqualDefault(retries) {
-  const def = DEFAULT_STATE.retries;
-  if (retries.length !== def.length) return false;
-  for (let i = 0; i < retries.length; ++i) {
-    const a = retries[i];
-    const b = def[i];
-    if (
-      a.success !== b.success ||
-      !a.runtime.equals(b.runtime) ||
-      (a.count ?? 1) !== (b.count ?? 1)
-    ) {
-      return false;
-    }
-    const aPeriod = a.period instanceof Duration;
-    const bPeriod = b.period instanceof Duration;
-    if (aPeriod !== bPeriod) return false;
-    if (aPeriod && bPeriod && !a.period.equals(b.period)) return false;
-  }
-  return true;
-}
-
 function defaultMaximumInterval(initialInterval) {
   return Duration.fromMilliseconds(
     MAX_INTERVAL_MULTIPLIER * initialInterval.toMilliseconds(),
@@ -239,38 +244,21 @@ function defaultMaximumInterval(initialInterval) {
   );
 }
 
-function fieldDefault(key, state) {
-  if (key === "maximumInterval") {
-    return defaultMaximumInterval(state.initialInterval);
-  }
-  return DEFAULT_STATE[key];
-}
-
-function fieldEqualsDefault(key, state) {
-  const def = fieldDefault(key, state);
-  const value = state[key];
-  if (def instanceof Duration) {
-    return value instanceof Duration && value.equals(def);
-  }
-  return value === def;
-}
-
+// Always emit every field. We deliberately don't skip values that match the
+// default — if the user landed on a default explicitly, the URL should reflect
+// that so it survives reload/share without flipping back to a different
+// resolved default (e.g. maximumInterval recomputing off initialInterval).
 export function encodeStateToParams(state) {
   const params = new URLSearchParams();
   for (const key of NUMERIC_FIELDS) {
-    if (fieldEqualsDefault(key, state)) continue;
     if (DURATION_FIELDS.includes(key)) {
       params.set(key, state[key].toString());
     } else {
       params.set(key, String(state[key]));
     }
   }
-  if (state.language !== DEFAULT_STATE.language) {
-    params.set("language", state.language);
-  }
-  if (!retriesEqualDefault(state.retries)) {
-    params.set("retries", encodeRetries(state.retries));
-  }
+  params.set("language", state.language);
+  params.set("retries", encodeRetries(state.retries));
   return params;
 }
 

@@ -6,6 +6,7 @@ import {
   decodeStateFromParams,
   encodeStateToParams,
   formatDurationHuman,
+  formatDurationLong,
 } from "./retry-simulator-state.mjs";
 
 const DEFAULTS = decodeStateFromParams("");
@@ -35,8 +36,25 @@ test("default state round-trips to itself", () => {
   assert.deepEqual(roundTrip(DEFAULTS), DEFAULTS);
 });
 
-test("default state encodes to no query params", () => {
-  assert.equal(encodeStateToParams(DEFAULTS).toString(), "");
+test("default state encodes every field unconditionally", () => {
+  // The encoder always writes every field — including ones that match the
+  // default — so the URL fully describes the configuration the user sees.
+  const params = encodeStateToParams(DEFAULTS);
+  assert.deepEqual(
+    Array.from(params.keys()).sort(),
+    [
+      "backoffCoefficient",
+      "initialInterval",
+      "language",
+      "maximumAttempts",
+      "maximumInterval",
+      "retries",
+      "scheduleTime",
+      "scheduleToCloseTimeout",
+      "scheduleToStartTimeout",
+      "startToCloseTimeout",
+    ]
+  );
 });
 
 test("non-default scalars round-trip", () => {
@@ -100,9 +118,9 @@ test("full non-default state round-trips end-to-end", () => {
   assert.deepEqual(roundTrip(state), state);
 });
 
-test("encoded params omit maximumInterval when it matches 100 × initialInterval", () => {
-  // A non-default initialInterval combined with the matching SDK-default
-  // maximumInterval should still leave maximumInterval out of the URL.
+test("encoded params include maximumInterval even when it matches 100 × initialInterval", () => {
+  // The encoder writes every field unconditionally — defaults are no longer
+  // elided — so an SDK-default maximumInterval still lands in the URL.
   const state = {
     ...DEFAULTS,
     initialInterval: new Duration(2500, "ms"),
@@ -110,10 +128,9 @@ test("encoded params omit maximumInterval when it matches 100 × initialInterval
     language: "go",
   };
   const params = encodeStateToParams(state);
-  assert.deepEqual(
-    Array.from(params.keys()).sort(),
-    ["initialInterval", "language"]
-  );
+  assert.equal(params.get("initialInterval"), "2500ms");
+  assert.equal(params.get("maximumInterval"), "250s");
+  assert.equal(params.get("language"), "go");
 });
 
 test("each numeric field round-trips in isolation", () => {
@@ -714,6 +731,22 @@ test("formatDurationHuman picks the largest natural unit", () => {
   assert.equal(formatDurationHuman(90_000), "1.5m");
   assert.equal(formatDurationHuman(3_600_000), "1h");
   assert.equal(formatDurationHuman(86_400_000), "24h");
+});
+
+test("formatDurationLong renders two most significant non-zero units", () => {
+  assert.equal(formatDurationLong(0), "0 seconds");
+  assert.equal(formatDurationLong(1), "1 millisecond");
+  assert.equal(formatDurationLong(500), "500 milliseconds");
+  assert.equal(formatDurationLong(1000), "1 second");
+  assert.equal(formatDurationLong(1500), "1 second 500 milliseconds");
+  assert.equal(formatDurationLong(60_000), "1 minute");
+  assert.equal(formatDurationLong(90_000), "1 minute 30 seconds");
+  assert.equal(formatDurationLong(150_000), "2 minutes 30 seconds");
+  assert.equal(formatDurationLong(3_600_000), "1 hour");
+  assert.equal(formatDurationLong(3_660_000), "1 hour 1 minute");
+  assert.equal(formatDurationLong(86_400_000), "24 hours");
+  // Skips middle zero unit when picking the two most significant components.
+  assert.equal(formatDurationLong(60_001), "1 minute 1 millisecond");
 });
 
 test("Duration.withUnit keeps the numeric value and changes the unit", () => {

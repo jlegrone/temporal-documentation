@@ -1,6 +1,6 @@
 import Chart from "chart.js/auto";
 import CodeBlock from "@theme/CodeBlock";
-import React, { useState, useCallback, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import styles from "./retry-simulator.module.css";
 import { useColorMode } from "@docusaurus/theme-common";
 import {
@@ -12,6 +12,7 @@ import {
   decodeStateFromParams,
   encodeStateToParams,
   formatDurationHuman,
+  formatDurationLong,
 } from "./retry-simulator-state.mjs";
 
 // Per-attempt bar colors on the retry-interval chart.
@@ -40,6 +41,18 @@ const EVENT_TYPE_DOCS_URL = {
 // Hard upper bound on bars rendered in either chart. Beyond this, individual
 // attempts get unreadably small; the simulation still tracks the actual count.
 const SLOT_CAP = 100;
+
+// Stable React keys for retry rows. We can't use array index — deleting retry
+// N would alias retry N+1 onto the deleted row's local component state
+// (stashedCount/stashedPeriod in RetryConfig). _key is not encoded into the
+// URL since encodeRetries only reads success/runtime/count/period.
+let nextRetryKey = 1;
+function withRetryKey(retry) {
+  return retry._key != null ? retry : { ...retry, _key: nextRetryKey++ };
+}
+function withRetryKeys(retries) {
+  return retries.map(withRetryKey);
+}
 
 // Chart.js plugin: draws a vertical red line at scheduleToCloseTimeout on the
 // timeline chart. The chart instance carries the current timeout in
@@ -75,24 +88,20 @@ const scheduleToCloseMarkerPlugin = {
   },
 };
 
-// Map a calculateResult outcome to the kind of label Temporal would attach to
-// the Workflow History event for the activity execution. Failures map to
-// "Failed (...)"; timeout-driven failures map to "Timed Out (timeoutType)".
-function resultStatusLabel(success, reason) {
+// High-level outcome shown in the Status row. Specifics (which timeout fired,
+// which event type, etc.) are surfaced separately in the Result and Details
+// rows, so this stays to one of: Success, Timed Out, Failed, Never terminates.
+function resultStatusLabel(success, reason, lastAttemptOutcome) {
   if (success === null) return "Never terminates";
   if (success === true) return "Success";
-  switch (reason) {
-    case "scheduleToCloseTimeout":
-      return "Timed Out (ScheduleToCloseTimeout)";
-    case "scheduleTime":
-      return "Timed Out (ScheduleToStartTimeout)";
-    case "maximumAttempts":
-      return "Failed (maximumAttempts)";
-    case "No retries":
-      return "Failed (no retries configured)";
-    default:
-      return "Failed";
+  if (
+    reason === "scheduleToCloseTimeout" ||
+    reason === "scheduleTime" ||
+    lastAttemptOutcome === "timedOut"
+  ) {
+    return "Timed Out";
   }
+  return "Failed";
 }
 
 // The Workflow History event that the Server records for the activity's
@@ -187,15 +196,93 @@ func TestActivity(ctx context.Context, url string) error {
 `.trim()
 );
 
+function withKeyedRetries(state) {
+  return { ...state, retries: withRetryKeys(state.retries) };
+}
+
+function updateChart(chart, state, result) {
+  const { backoffCoefficient } = state;
+  const initialInterval = state.initialInterval.toMilliseconds();
+  const maximumInterval = state.maximumInterval.toMilliseconds();
+  const { maximumAttempts } = state;
+  const labels = [];
+  const values = [];
+  // Each bar is colored by what actually happened on that attempt (succeeded /
+  // failed / timed out) or grayed out for slots the activity never reached.
+  const baseSlots = maximumAttempts === 0 ? 10 : Math.min(maximumAttempts, 30);
+  // When the activity terminates, grow the chart to cover every attempt that
+  // actually ran so the user can see the full retry sequence. For the
+  // never-terminates branch (result.success === null) we keep the baseline
+  // slot count — there's no meaningful "all attempts" to show.
+  const slots =
+    result.success !== null
+      ? Math.min(SLOT_CAP, Math.max(baseSlots, result.attempts))
+      : baseSlots;
+  const attemptTimeline = result.attemptTimeline || [];
+  let interval = initialInterval;
+  const colors = [];
+  for (let i = 0; i < slots; ++i) {
+    interval = Math.min(interval, maximumInterval);
+    labels.push(i + 1);
+    values.push(interval);
+    colors.push(OUTCOME_COLORS[attemptTimeline[i]?.outcome] || OUTCOME_COLORS.notUsed);
+    interval = interval * backoffCoefficient;
+  }
+
+  chart.data.labels = labels;
+  chart.data.datasets = [
+    {
+      label: "Retry interval after each attempt (ms)",
+      backgroundColor: colors,
+      borderColor: colors,
+      data: values,
+    },
+  ];
+  chart.update();
+}
+
+function updateTimeline(chart, state, result) {
+  const timeline = result.attemptTimeline || [];
+  const labels = timeline.map((_, i) => i + 1);
+  // Floating bars: each data point is [start, end] in ms. Chart.js renders
+  // them as horizontal spans on the wall-clock X-axis when indexAxis is "y".
+  const data = timeline.map((a) => [a.startMS, a.startMS + a.elapsedMS]);
+  const colors = timeline.map((a) => OUTCOME_COLORS[a.outcome] || OUTCOME_COLORS.notUsed);
+
+  chart.$scheduleToCloseTimeoutMS = state.scheduleToCloseTimeout.toMilliseconds();
+  chart.$timeline = timeline;
+
+  // Anchor the X-axis to at least 5× the first attempt's duration so a
+  // single quick attempt doesn't render against a tiny zoomed-in axis. The
+  // existing data-driven max takes over once attempts run past this floor.
+  const firstAttemptElapsed = timeline[0]?.elapsedMS ?? 0;
+  chart.options.scales.x.suggestedMin = 0;
+  chart.options.scales.x.suggestedMax = firstAttemptElapsed * 5;
+
+  chart.data.labels = labels;
+  chart.data.datasets = [
+    {
+      label: "Attempt time on the wall clock",
+      backgroundColor: colors,
+      borderColor: colors,
+      data,
+      borderWidth: 1,
+      // Make zero-elapsed-time attempts visible.
+      minBarLength: 4,
+    },
+  ];
+  chart.update();
+}
+
 export default function RetrySimulator() {
-  const [state, setState] = useState(() => decodeStateFromParams(""));
+  const [state, setState] = useState(() => withKeyedRetries(decodeStateFromParams("")));
   const chartCanvas = useRef(null);
   const timelineCanvas = useRef(null);
-  const hasHydratedFromUrl = useRef(false);
+  const persistEffectHasRun = useRef(false);
   const { colorMode } = useColorMode();
   const isDarkTheme = colorMode === 'dark';
 
-  const addRetry = useCallback(function addRetry(success) {
+  function addRetry() {
     const retries = [...state.retries];
     if (retries.length > 0) {
       retries[retries.length - 1] = {
@@ -203,12 +290,12 @@ export default function RetrySimulator() {
         success: false,
       };
     }
-    retries.push({ success, runtime: new Duration(1, "s") });
-
+    retries.push(withRetryKey({ success: true, runtime: new Duration(1, "s") }));
     setState({ ...state, retries });
-  });
+  }
 
-  const updateRetry = useCallback(function updateRetry(index, update) {
+  function updateRetry(index, rawUpdate) {
+    const update = { ...rawUpdate };
     const retries = [...state.retries];
     if (update.count != null) {
       update.count = Math.max(1, Math.floor(+update.count));
@@ -230,15 +317,15 @@ export default function RetrySimulator() {
       delete retries[index].period;
     }
     setState({ ...state, retries });
-  });
+  }
 
-  const deleteRetry = useCallback(function deleteRetry(index) {
+  function deleteRetry(index) {
     const retries = [...state.retries];
     retries.splice(index, 1);
     setState({ ...state, retries });
-  });
+  }
 
-  const applyRetryScenario = useCallback(function applyRetryScenario(values) {
+  function applyRetryScenario(values) {
     if (!values) {
       return;
     }
@@ -248,10 +335,10 @@ export default function RetrySimulator() {
       const period = new Duration(values.periodValue, values.periodUnit);
       setState({
         ...state,
-        retries: [
+        retries: withRetryKeys([
           { success: false, runtime: new Duration(100, "ms"), period },
           { success: true, runtime: new Duration(100, "ms") },
-        ],
+        ]),
       });
       return;
     }
@@ -266,10 +353,10 @@ export default function RetrySimulator() {
       const period = new Duration(values.periodValue, values.periodUnit);
       setState({
         ...state,
-        retries: [
+        retries: withRetryKeys([
           { success: true, runtime: new Duration(5, "s"), period },
           { success: true, runtime: new Duration(100, "ms") },
-        ],
+        ]),
       });
       return;
     }
@@ -287,10 +374,10 @@ export default function RetrySimulator() {
       }
     }
 
-    setState({ ...state, retries });
-  });
+    setState({ ...state, retries: withRetryKeys(retries) });
+  }
 
-  const updateRetryPolicyParam = useCallback(function updateRetryPolicyParam(prop, ev) {
+  function updateRetryPolicyParam(prop, ev) {
     const value = getEventValue(ev);
     if (isNaN(value)) {
       return;
@@ -300,192 +387,88 @@ export default function RetrySimulator() {
     // Duration fields keep their selected unit when the numeric value changes.
     const update = current instanceof Duration ? current.withValue(next) : next;
     setState({ ...state, [prop]: update });
-    updateChart();
-  });
+  }
 
-  const updateRetryPolicyParamUnit = useCallback(function updateRetryPolicyParamUnit(prop, unit) {
+  function updateRetryPolicyParamUnit(prop, unit) {
     const current = state[prop];
     if (!(current instanceof Duration)) return;
     setState({ ...state, [prop]: current.withUnit(unit) });
-  });
+  }
 
-  const updateChart = useCallback(function updateChart() {
-    if (chartCanvas.current == null || chartCanvas.current.chart == null) {
-      return;
-    }
-    const chart = chartCanvas.current.chart;
-
-    const { backoffCoefficient } = state;
-    const initialInterval = state.initialInterval.toMilliseconds();
-    const maximumInterval = state.maximumInterval.toMilliseconds();
-    const { maximumAttempts } = state;
-    const labels = [];
-    const values = [];
-    // Run the simulation alongside the chart so each bar is colored by what
-    // actually happened on that attempt (succeeded / failed / timed out) or
-    // grayed out for slots the activity never reached. Cap tracked outcomes
-    // at SLOT_CAP since the chart can't usefully render more bars than that.
-    const result = calculateResult(state, { trackOutcomes: SLOT_CAP });
-    const baseSlots = maximumAttempts === 0 ? 10 : Math.min(maximumAttempts, 30);
-    // When the activity terminates, grow the chart to cover every attempt that
-    // actually ran so the user can see the full retry sequence. For the
-    // never-terminates branch (result.success === null) we keep the baseline
-    // slot count — there's no meaningful "all attempts" to show.
-    const slots =
-      result.success !== null
-        ? Math.min(SLOT_CAP, Math.max(baseSlots, result.attempts))
-        : baseSlots;
-    const attemptTimeline = result.attemptTimeline || [];
-    let interval = initialInterval;
-    const colors = [];
-    for (let i = 0; i < slots; ++i) {
-      interval = Math.min(interval, maximumInterval);
-      labels.push(i + 1);
-      values.push(interval);
-      colors.push(OUTCOME_COLORS[attemptTimeline[i]?.outcome] || OUTCOME_COLORS.notUsed);
-      interval = interval * backoffCoefficient;
-    }
-
-    if (labels.length > chart.data.labels.length) {
-      chart.data.labels.push(...labels.slice(chart.data.labels.length));
-    } else if (labels.length < chart.data.labels.length) {
-      chart.data.labels.splice(labels.length, chart.data.length - labels.length);
-    }
-    chart.data.labels = labels;
-    chart.data.datasets = [
-      {
-        label: "Retry interval after each attempt (ms)",
-        backgroundColor: colors,
-        borderColor: colors,
-        data: values,
-      },
-    ];
-    chart.update();
-  });
-
-  const updateTimeline = useCallback(function updateTimeline() {
-    if (timelineCanvas.current == null || timelineCanvas.current.chart == null) {
-      return;
-    }
-    const chart = timelineCanvas.current.chart;
-    const result = calculateResult(state, { trackOutcomes: SLOT_CAP });
-    const timeline = result.attemptTimeline || [];
-    const labels = timeline.map((_, i) => i + 1);
-    // Floating bars: each data point is [start, end] in ms. Chart.js renders
-    // them as horizontal spans on the wall-clock X-axis when indexAxis is "y".
-    const data = timeline.map((a) => [a.startMS, a.startMS + a.elapsedMS]);
-    const colors = timeline.map((a) => OUTCOME_COLORS[a.outcome] || OUTCOME_COLORS.notUsed);
-
-    const scheduleToCloseMS = state.scheduleToCloseTimeout.toMilliseconds();
-    chart.$scheduleToCloseTimeoutMS = scheduleToCloseMS;
-    chart.$timeline = timeline;
-
-    // Anchor the X-axis to at least 5× the first attempt's duration so a
-    // single quick attempt doesn't render against a tiny zoomed-in axis. The
-    // existing data-driven max takes over once attempts run past this floor.
-    const firstAttemptElapsed = timeline[0]?.elapsedMS ?? 0;
-    chart.options.scales.x.suggestedMin = 0;
-    chart.options.scales.x.suggestedMax = firstAttemptElapsed * 5;
-
-    chart.data.labels = labels;
-    chart.data.datasets = [
-      {
-        label: "Attempt time on the wall clock",
-        backgroundColor: colors,
-        borderColor: colors,
-        data,
-        borderWidth: 1,
-        // Make zero-elapsed-time attempts visible by giving them a minimum
-        // pixel width via barPercentage; otherwise instantaneous attempts
-        // wouldn't render at all.
-        minBarLength: 4,
-      },
-    ];
-    chart.update();
-  });
-
-  const updateLanguage = useCallback(function updateLanguage(language) {
+  function updateLanguage(language) {
     setState({ ...state, language });
-  });
+  }
 
-  const { success, runtimeMS, reason, attempts, lastAttemptOutcome } = calculateResult(state);
+  // Single simulation per render, shared by the result panel and both charts.
+  const result = calculateResult(state, { trackOutcomes: SLOT_CAP });
+  const { success, runtimeMS, reason, attempts, lastAttemptOutcome } = result;
   const code = retryPolicyCode(state);
   const eventType = resultEventType(success, reason, lastAttemptOutcome);
   const detailsLink = resultDetailsLink(success, reason, lastAttemptOutcome);
 
-  useEffect(
-    function initializeChart() {
-      const chart = new Chart(chartCanvas.current, {
-        type: "bar",
-        options: {
-          responsive: true,
-          scales: {
-            y: {
-              grid: {
-                color: "#ddd",
-              },
+  useEffect(function initializeChart() {
+    const chart = new Chart(chartCanvas.current, {
+      type: "bar",
+      options: {
+        responsive: true,
+        scales: {
+          y: { grid: { color: "#ddd" } },
+          x: { grid: { color: "#ddd" } },
+        },
+      },
+    });
+    chartCanvas.current.chart = chart;
+    return () => {
+      chart.destroy();
+      if (chartCanvas.current) chartCanvas.current.chart = null;
+    };
+  }, []);
+
+  useEffect(function initializeTimelineChart() {
+    const chart = new Chart(timelineCanvas.current, {
+      type: "bar",
+      plugins: [scheduleToCloseMarkerPlugin],
+      options: {
+        responsive: true,
+        indexAxis: "y",
+        scales: {
+          x: {
+            type: "linear",
+            title: { display: true, text: "Wall-clock time" },
+            grid: { color: "#ddd" },
+            ticks: {
+              callback: (value) => formatDurationHuman(value),
             },
-            x: {
-              grid: {
-                color: "#ddd",
+          },
+          y: {
+            title: { display: true, text: "Attempt" },
+            grid: { color: "#ddd" },
+            ticks: { autoSkip: true, maxTicksLimit: 12 },
+          },
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => `Attempt ${items[0].label}`,
+              label: (item) => {
+                const [start, end] = item.raw;
+                const span = `${formatDurationHuman(start)} → ${formatDurationHuman(end)} (${formatDurationHuman(end - start)})`;
+                const attempt = item.chart.$timeline?.[item.dataIndex];
+                if (!attempt) return span;
+                return [span, `Status: ${OUTCOME_EVENT_TYPE[attempt.outcome]}`];
               },
             },
           },
         },
-      });
-      chartCanvas.current.chart = chart;
-
-      updateChart();
-    },
-    [chartCanvas]
-  );
-
-  useEffect(
-    function initializeTimelineChart() {
-      const chart = new Chart(timelineCanvas.current, {
-        type: "bar",
-        plugins: [scheduleToCloseMarkerPlugin],
-        options: {
-          responsive: true,
-          indexAxis: "y",
-          scales: {
-            x: {
-              type: "linear",
-              title: { display: true, text: "Wall-clock time" },
-              grid: { color: "#ddd" },
-              ticks: {
-                callback: (value) => formatDurationHuman(value),
-              },
-            },
-            y: {
-              title: { display: true, text: "Attempt" },
-              grid: { color: "#ddd" },
-              ticks: { autoSkip: true, maxTicksLimit: 12 },
-            },
-          },
-          plugins: {
-            legend: { display: false },
-            tooltip: {
-              callbacks: {
-                title: (items) => `Attempt ${items[0].label}`,
-                label: (item) => {
-                  const [start, end] = item.raw;
-                  const span = `${formatDurationHuman(start)} → ${formatDurationHuman(end)} (${formatDurationHuman(end - start)})`;
-                  const attempt = item.chart.$timeline?.[item.dataIndex];
-                  if (!attempt) return span;
-                  return [span, `Status: ${OUTCOME_EVENT_TYPE[attempt.outcome]}`];
-                },
-              },
-            },
-          },
-        },
-      });
-      timelineCanvas.current.chart = chart;
-
-      updateTimeline();
-    },
-    [timelineCanvas]
-  );
+      },
+    });
+    timelineCanvas.current.chart = chart;
+    return () => {
+      chart.destroy();
+      if (timelineCanvas.current) timelineCanvas.current.chart = null;
+    };
+  }, []);
 
   useEffect(
     function updateChartDarkTheme() {
@@ -501,14 +484,14 @@ export default function RetrySimulator() {
   );
 
   useEffect(function loadStateFromUrl() {
-    setState(decodeStateFromParams(window.location.search));
+    setState(withKeyedRetries(decodeStateFromParams(window.location.search)));
   }, []);
 
   useEffect(function persistStateToUrl() {
     // Skip the first run so we don't briefly clobber the URL with
     // empty params before loadStateFromUrl's setState has been applied.
-    if (!hasHydratedFromUrl.current) {
-      hasHydratedFromUrl.current = true;
+    if (!persistEffectHasRun.current) {
+      persistEffectHasRun.current = true;
       return;
     }
     const params = encodeStateToParams(state);
@@ -518,9 +501,12 @@ export default function RetrySimulator() {
     window.history.replaceState(null, "", newUrl);
   }, [state]);
 
+  // Redraw both charts whenever state changes. result is derived from state,
+  // so depending on state alone keeps this effect from firing on every render.
   useEffect(() => {
-    updateChart();
-    updateTimeline();
+    if (chartCanvas.current?.chart) updateChart(chartCanvas.current.chart, state, result);
+    if (timelineCanvas.current?.chart) updateTimeline(timelineCanvas.current.chart, state, result);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
 
   return (
@@ -606,12 +592,12 @@ export default function RetrySimulator() {
                   index={index}
                   updateRetry={updateRetry}
                   deleteRetry={deleteRetry}
-                  key={index}
+                  key={retry._key}
                 />
               );
             })}
           </div>
-          <button className={styles.addButton} onClick={() => addRetry(true)}>
+          <button className={styles.addButton} onClick={() => addRetry()}>
             + Add
           </button>
         </div>
@@ -680,7 +666,7 @@ export default function RetrySimulator() {
           <div className={styles.result + " " + (success === true ? styles.success : styles.fail)}>
             <div className={styles.resultRow}>
               <span className={styles.resultLabel}>Status</span>
-              <span className={styles.resultValue}>{resultStatusLabel(success, reason)}</span>
+              <span className={styles.resultValue}>{resultStatusLabel(success, reason, lastAttemptOutcome)}</span>
             </div>
             {eventType && (
               <div className={styles.resultRow}>
@@ -705,7 +691,7 @@ export default function RetrySimulator() {
             <div className={styles.resultRow}>
               <span className={styles.resultLabel}>Time Elapsed</span>
               <span className={styles.resultValue}>
-                {success === null ? "∞" : formatDurationHuman(runtimeMS)}
+                {success === null ? "∞" : formatDurationLong(runtimeMS)}
               </span>
             </div>
             <div className={styles.resultRow}>
@@ -752,7 +738,7 @@ function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
           className={styles.numberInputLabel}
           disabled={index + 1 < numRetries}
           value={retry.success ? "succeeds" : "fails"}
-          onChange={(ev) => updateRetry(index, { success: ev.target.value === "success" })}
+          onChange={(ev) => updateRetry(index, { success: ev.target.value === "succeeds" })}
         >
           <option value="fails">Fails after</option>
           <option value="succeeds">Succeeds after</option>
@@ -781,9 +767,14 @@ function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
             updateRetry(index, { runtime: runtime.withValue(next) });
           }}
         />
-        <span className={styles.removeRetry} onClick={() => deleteRetry(index)}>
+        <button
+          type="button"
+          className={styles.removeRetry}
+          onClick={() => deleteRetry(index)}
+          aria-label="Remove this retry"
+        >
           &times;
-        </span>
+        </button>
       </div>
       {index + 1 < numRetries && (
         <>
@@ -807,7 +798,7 @@ function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
             <span className={styles.retryCountSuffix}>
               {count === 1
                 ? "attempt"
-                : `attempts, avg ${runtime.value} ${runtime.unit} each`}
+                : `attempts, avg ${runtime.value}${runtime.unit} each`}
             </span>
           </div>
           <div className={styles.retryCountRow}>
@@ -884,7 +875,7 @@ const PARAM_METADATA = {
     label: "Initial Interval",
     description: "Amount of time that must elapse before the first retry occurs.",
     href: "/encyclopedia/retry-policies#initial-interval",
-    defaultDisplay: "1000 ms",
+    defaultDisplay: "1000ms",
   },
   maximumAttempts: {
     label: "Maximum Attempts",
