@@ -255,6 +255,11 @@ export default function RetrySimulator() {
               {languageSamples.get(state.language)}
             </CodeBlock>
 
+            <h3>Sample Retry Policy</h3>
+            <CodeBlock language={state.language} className={styles.codeBlock}>
+              {code}
+            </CodeBlock>
+
             <h3>Activity Retries (in ms)</h3>
 
             <select className={styles.dropdown} onChange={(ev) => applyRetryScenario(ev.target.value)}>
@@ -376,12 +381,7 @@ export default function RetrySimulator() {
           </div>
         </div>
         <div className={styles.retryCol}>
-          <div>
-            <CodeBlock language={state.language}>{code}</CodeBlock>
-          </div>
-          <div>
-            <canvas ref={chartCanvas}></canvas>
-          </div>
+          <canvas ref={chartCanvas}></canvas>
         </div>
       </div>
     </div>
