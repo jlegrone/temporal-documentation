@@ -156,10 +156,8 @@ function resultDetailsLink(success, reason, lastAttemptOutcome) {
   return null;
 }
 
-const languageSamples = new Map([]);
-languageSamples.set(
-  "typescript",
-  `
+const LANGUAGE_SAMPLES = {
+  typescript: `
 import axios from 'axios';
 
 async function testActivity(url: string): Promise<void> {
@@ -167,11 +165,8 @@ async function testActivity(url: string): Promise<void> {
 }
 
 export default testActivity;
-`.trim()
-);
-languageSamples.set(
-  "go",
-  `
+`.trim(),
+  go: `
 package sample
 
 import (
@@ -193,18 +188,17 @@ func TestActivity(ctx context.Context, url string) error {
 
 	return nil
 }
-`.trim()
-);
+`.trim(),
+};
 
 function withKeyedRetries(state) {
   return { ...state, retries: withRetryKeys(state.retries) };
 }
 
 function updateChart(chart, state, result) {
-  const { backoffCoefficient } = state;
+  const { backoffCoefficient, maximumAttempts } = state;
   const initialInterval = state.initialInterval.toMilliseconds();
   const maximumInterval = state.maximumInterval.toMilliseconds();
-  const { maximumAttempts } = state;
   const labels = [];
   const values = [];
   // Each bar is colored by what actually happened on that attempt (succeeded /
@@ -218,14 +212,13 @@ function updateChart(chart, state, result) {
     result.success !== null
       ? Math.min(SLOT_CAP, Math.max(baseSlots, result.attempts))
       : baseSlots;
-  const attemptTimeline = result.attemptTimeline || [];
   let interval = initialInterval;
   const colors = [];
   for (let i = 0; i < slots; ++i) {
     interval = Math.min(interval, maximumInterval);
     labels.push(i + 1);
     values.push(interval);
-    colors.push(OUTCOME_COLORS[attemptTimeline[i]?.outcome] || OUTCOME_COLORS.notUsed);
+    colors.push(OUTCOME_COLORS[result.attemptTimeline[i]?.outcome] || OUTCOME_COLORS.notUsed);
     interval = interval * backoffCoefficient;
   }
 
@@ -242,7 +235,7 @@ function updateChart(chart, state, result) {
 }
 
 function updateTimeline(chart, state, result) {
-  const timeline = result.attemptTimeline || [];
+  const timeline = result.attemptTimeline;
   const labels = timeline.map((_, i) => i + 1);
   // Floating bars: each data point is [start, end] in ms. Chart.js renders
   // them as horizontal spans on the wall-clock X-axis when indexAxis is "y".
@@ -378,11 +371,8 @@ export default function RetrySimulator() {
   }
 
   function updateRetryPolicyParam(prop, ev) {
-    const value = getEventValue(ev);
-    if (isNaN(value)) {
-      return;
-    }
-    const next = +value;
+    const next = +ev.target.value;
+    if (isNaN(next)) return;
     const current = state[prop];
     // Duration fields keep their selected unit when the numeric value changes.
     const update = current instanceof Duration ? current.withValue(next) : next;
@@ -390,9 +380,7 @@ export default function RetrySimulator() {
   }
 
   function updateRetryPolicyParamUnit(prop, unit) {
-    const current = state[prop];
-    if (!(current instanceof Duration)) return;
-    setState({ ...state, [prop]: current.withUnit(unit) });
+    setState({ ...state, [prop]: state[prop].withUnit(unit) });
   }
 
   function updateLanguage(language) {
@@ -400,7 +388,7 @@ export default function RetrySimulator() {
   }
 
   // Single simulation per render, shared by the result panel and both charts.
-  const result = calculateResult(state, { trackOutcomes: SLOT_CAP });
+  const result = calculateResult(state);
   const { success, runtimeMS, reason, attempts, lastAttemptOutcome } = result;
   const code = retryPolicyCode(state);
   const eventType = resultEventType(success, reason, lastAttemptOutcome);
@@ -528,7 +516,7 @@ export default function RetrySimulator() {
             </div>
 
             <CodeBlock language={state.language} className={styles.codeBlock}>
-              {languageSamples.get(state.language)}
+              {LANGUAGE_SAMPLES[state.language]}
             </CodeBlock>
 
             <h3>Sample Retry Policy</h3>
@@ -584,18 +572,16 @@ export default function RetrySimulator() {
             </div>
           </div>
           <div className="retries-list">
-            {state.retries.map((retry, index) => {
-              return (
-                <RetryConfig
-                  retry={retry}
-                  numRetries={state.retries.length}
-                  index={index}
-                  updateRetry={updateRetry}
-                  deleteRetry={deleteRetry}
-                  key={retry._key}
-                />
-              );
-            })}
+            {state.retries.map((retry, index) => (
+              <RetryConfig
+                retry={retry}
+                numRetries={state.retries.length}
+                index={index}
+                updateRetry={updateRetry}
+                deleteRetry={deleteRetry}
+                key={retry._key}
+              />
+            ))}
           </div>
           <button className={styles.addButton} onClick={() => addRetry()}>
             + Add
@@ -742,7 +728,7 @@ function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
   const count = retry.count ?? stashedCount;
   const period = retry.period instanceof Duration ? retry.period : stashedPeriod;
   return (
-    <div className={styles.retry} key={"retry-" + index}>
+    <div className={styles.retry}>
       <div className={styles.inputContainer}>
         <select
           className={styles.numberInputLabel}
@@ -912,24 +898,13 @@ function RetryPolicyParamInputs({
   step,
 }) {
   const meta = PARAM_METADATA[param];
-  // Duration fields surface a unit dropdown and render the input/slider in
-  // the chosen display unit. Plain-number fields (backoffCoefficient,
-  // maximumAttempts) keep the original layout.
   const isDuration = value instanceof Duration;
   const inputValue = isDuration ? value.value : value;
-  // Slider bounds are configured in ms for duration fields; scale them down
-  // to the chosen display unit so the slider tracks the input. Whole numbers
-  // only (regardless of unit) so the slider value the user reads off the UI
-  // matches whatever unit they selected without trailing decimals.
+  // For Duration fields the slider/input bounds arrive in ms; rescale them
+  // to whatever display unit the user picked. The `|| 1` guards value=0.
   const unitFactor = isDuration ? value.toMilliseconds() / value.value || 1 : 1;
-  const scale = isDuration
-    ? (msValue) => (msValue == null ? msValue : msValue / unitFactor)
-    : (v) => v;
-  const sliderMin = isDuration
-    ? min
-      ? Math.max(1, Math.round(scale(min)))
-      : 0
-    : min || 0;
+  const scale = isDuration ? (ms) => ms / unitFactor : (v) => v;
+  const sliderMin = isDuration ? (min ? Math.max(1, Math.round(scale(min))) : 0) : min || 0;
   const sliderMax = isDuration ? Math.max(1, Math.round(scale(max))) : max || 100;
   const sliderStep = isDuration ? Math.max(1, Math.round(scale(step))) : step || 1;
   return (
@@ -1038,10 +1013,6 @@ function retryPolicyCode(state) {
     ].join("\n");
     return val;
   }
-}
-
-function getEventValue(ev) {
-  return ev && ev.target && ev.target.value;
 }
 
 function capitalizeFirstLetter(val) {

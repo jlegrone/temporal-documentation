@@ -420,6 +420,7 @@ test("calculateResult: succeeds on first attempt with default state", () => {
     runtimeMS: 1000,
     attempts: 1,
     lastAttemptOutcome: "succeeded",
+    attemptTimeline: [{ startMS: 0, elapsedMS: 1000, outcome: "succeeded" }],
   });
 });
 
@@ -755,7 +756,7 @@ test("Duration.withUnit keeps the numeric value and changes the unit", () => {
   assert.equal(d.withUnit("s").toMilliseconds(), 1_500_000);
 });
 
-test("calculateResult: trackOutcomes returns attemptTimeline with monotonic startMS", () => {
+test("calculateResult returns attemptTimeline with monotonic startMS", () => {
   const state = {
     ...DEFAULTS,
     initialInterval: new Duration(1, "s"),
@@ -767,7 +768,7 @@ test("calculateResult: trackOutcomes returns attemptTimeline with monotonic star
       { success: true, runtime: new Duration(100, "ms") },
     ],
   };
-  const result = calculateResult(state, { trackOutcomes: 10 });
+  const result = calculateResult(state);
   const tl = result.attemptTimeline;
   assert.equal(tl.length, 3);
   // Monotonic non-decreasing startMS, each follows the previous attempt + retry interval.
@@ -795,7 +796,7 @@ test("calculateResult: attemptTimeline elapsedMS clamps at startToCloseTimeout",
     maximumAttempts: 3,
     retries: [{ success: true, runtime: new Duration(5, "s") }],
   };
-  const result = calculateResult(state, { trackOutcomes: 10 });
+  const result = calculateResult(state);
   const tl = result.attemptTimeline;
   assert.equal(tl.length, 3);
   for (const a of tl) {
@@ -836,24 +837,26 @@ test("calculateResult: lastAttemptOutcome reflects the final attempt's outcome",
   assert.equal(failedResult.reason, "maximumAttempts");
 });
 
-test("calculateResult: trackOutcomes caps attemptTimeline length", () => {
+test("calculateResult caps attemptTimeline at the hardcoded limit", () => {
+  // 200 attempts > 100-entry cap; only the first 100 should appear in the
+  // timeline while the reported total attempt count is unaffected.
   const state = {
     ...DEFAULTS,
     initialInterval: new Duration(1, "ms"),
     backoffCoefficient: 1,
     scheduleToCloseTimeout: new Duration(1_000_000, "ms"),
-    maximumAttempts: 50,
+    maximumAttempts: 200,
     retries: [{ success: false, runtime: new Duration(1, "ms") }],
   };
-  const result = calculateResult(state, { trackOutcomes: 5 });
-  assert.equal(result.attemptTimeline.length, 5);
-  assert.equal(result.attempts, 50);
+  const result = calculateResult(state);
+  assert.equal(result.attemptTimeline.length, 100);
+  assert.equal(result.attempts, 200);
 });
 
-test("calculateResult: never-terminating chain still populates attemptTimeline up to trackOutcomes", () => {
+test("never-terminating chain still populates attemptTimeline", () => {
   // Classic infinite retry: failure-only chain, no maximumAttempts, no
   // scheduleToCloseTimeout. The result is neverTerminates, but the timeline
-  // should still show the first N projected attempts so the chart isn't blank.
+  // should still show the first projected attempts so the chart isn't blank.
   const state = {
     ...DEFAULTS,
     scheduleToCloseTimeout: new Duration(0, "s"),
@@ -862,14 +865,10 @@ test("calculateResult: never-terminating chain still populates attemptTimeline u
     maximumAttempts: 0,
     retries: [{ success: false, runtime: new Duration(100, "ms") }],
   };
-  const result = calculateResult(state, { trackOutcomes: 10 });
+  const result = calculateResult(state);
   assert.equal(result.success, null);
   assert.equal(result.reason, "neverTerminates");
   assert.equal(result.attempts, Infinity);
-  assert.equal(result.attemptTimeline.length, 10);
+  assert.equal(result.attemptTimeline.length, 100);
   assert.ok(result.attemptTimeline.every((a) => a.outcome === "failed"));
-  // Without trackOutcomes the function still bails immediately with no timeline.
-  const bare = calculateResult(state);
-  assert.equal(bare.success, null);
-  assert.equal(bare.attemptTimeline, undefined);
 });

@@ -244,34 +244,32 @@ function defaultMaximumInterval(initialInterval) {
   );
 }
 
-// Always emit every field. We deliberately don't skip values that match the
-// default — if the user landed on a default explicitly, the URL should reflect
-// that so it survives reload/share without flipping back to a different
-// resolved default (e.g. maximumInterval recomputing off initialInterval).
+// Emit every field (including those at their default) so the URL fully
+// describes the configuration and survives reload without resolved defaults
+// like maximumInterval shifting under a changed initialInterval. String()
+// coerces both bare numbers and Duration via toString().
 export function encodeStateToParams(state) {
   const params = new URLSearchParams();
   for (const key of NUMERIC_FIELDS) {
-    if (DURATION_FIELDS.includes(key)) {
-      params.set(key, state[key].toString());
-    } else {
-      params.set(key, String(state[key]));
-    }
+    params.set(key, String(state[key]));
   }
   params.set("language", state.language);
   params.set("retries", encodeRetries(state.retries));
   return params;
 }
 
+// Maximum number of per-attempt records emitted in the result's
+// attemptTimeline. Beyond this the chart can't usefully render distinct bars.
+const ATTEMPT_TIMELINE_CAP = 100;
+
 /**
- * @param state The simulator state.
- * @param options.trackOutcomes If a positive integer, the result includes an
- *   `attemptTimeline` array of per-attempt records
- *   `{ startMS, elapsedMS, outcome }` (outcome is "succeeded", "failed", or
- *   "timedOut"), capped at this many entries. The charts use this to color
- *   bars and place them on a wall-clock axis without re-running the
- *   simulation.
+ * Run the simulation and return the outcome plus an `attemptTimeline` array
+ * of per-attempt `{ startMS, elapsedMS, outcome }` records (outcome is
+ * "succeeded", "failed", or "timedOut"). The timeline is always emitted and
+ * is capped at ATTEMPT_TIMELINE_CAP entries; the charts use it to color bars
+ * and place them on a wall-clock axis without re-running the simulation.
  */
-export function calculateResult(state, options = {}) {
+export function calculateResult(state) {
   const startToCloseTimeout = state.startToCloseTimeout.toMilliseconds();
   const scheduleToCloseTimeout = state.scheduleToCloseTimeout.toMilliseconds();
   const scheduleToStartTimeout = state.scheduleToStartTimeout.toMilliseconds();
@@ -279,13 +277,8 @@ export function calculateResult(state, options = {}) {
   const initialInterval = state.initialInterval.toMilliseconds();
   const maximumInterval = state.maximumInterval.toMilliseconds();
   const { maximumAttempts, backoffCoefficient } = state;
-  const trackLimit =
-    typeof options.trackOutcomes === "number" && options.trackOutcomes > 0
-      ? options.trackOutcomes
-      : 0;
-  const timeline = trackLimit > 0 ? [] : null;
-  const withTimeline = (result) =>
-    timeline ? { ...result, attemptTimeline: timeline } : result;
+  const timeline = [];
+  const withTimeline = (result) => ({ ...result, attemptTimeline: timeline });
 
   if (scheduleToStartTimeout > 0 && scheduleTime >= scheduleToStartTimeout) {
     return withTimeline({
@@ -347,14 +340,11 @@ export function calculateResult(state, options = {}) {
       maximumAttempts === 0 &&
       (scheduleToCloseTimeout === 0 || noProgress)
     ) {
-      // Don't bail before populating the timeline — run just enough
-      // iterations to fill it so the chart still shows the projected
-      // attempts. The success/cap checks inside the loop are known not to
-      // fire here, so capping at trackLimit is safe and avoids spinning.
-      if (trackLimit === 0) {
-        return { success: null, runtimeMS: 0, attempts: Infinity, reason: "neverTerminates" };
-      }
-      iterCap = trackLimit;
+      // Run just enough iterations to fill the timeline so the chart still
+      // shows the projected attempts. The success/cap checks inside the
+      // loop are known not to fire here, so capping is safe and avoids
+      // spinning.
+      iterCap = ATTEMPT_TIMELINE_CAP;
     }
   }
 
@@ -407,7 +397,7 @@ export function calculateResult(state, options = {}) {
     entryAttemptsUsed += 1;
 
     const attemptOutcome = timedOut ? "timedOut" : isSuccess ? "succeeded" : "failed";
-    if (timeline && timeline.length < trackLimit) {
+    if (timeline.length < ATTEMPT_TIMELINE_CAP) {
       timeline.push({
         startMS: attemptStartMS,
         elapsedMS: attemptElapsed,
