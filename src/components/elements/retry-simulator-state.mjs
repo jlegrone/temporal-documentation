@@ -326,7 +326,7 @@ export function calculateResult(state) {
   // per-iteration progress) can't lock up the page. Reaching this cap means
   // the simulation hasn't converged in a reasonable bound; reporting
   // neverTerminates is more honest than continuing.
-  const ITERATION_GUARD = 1_000_000;
+  const ITERATION_GUARD = 1_000;
   let iterCap = ITERATION_GUARD;
   if (projectedRuntimeMS != null) {
     const projectedAttemptElapsed =
