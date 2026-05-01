@@ -449,6 +449,51 @@ test("calculateResult: scheduleToStartTimeout=0 ignores scheduleTime entirely", 
   assert.equal(result.success, true);
 });
 
+test("calculateResult: scheduleTime exactly equal to scheduleToStartTimeout still bails out", () => {
+  // Boundary case for the >= comparison.
+  const state = {
+    ...DEFAULTS,
+    scheduleToStartTimeout: new Duration(100, "ms"),
+    scheduleTime: new Duration(100, "ms"),
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, false);
+  assert.equal(result.reason, "scheduleTime");
+});
+
+test("calculateResult: per-attempt runtime exactly equal to startToCloseTimeout still bails out", () => {
+  // Boundary case for the >= comparison on per-attempt runtime.
+  const state = {
+    ...DEFAULTS,
+    startToCloseTimeout: new Duration(100, "ms"),
+    retries: [{ success: false, runtime: new Duration(100, "ms") }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, false);
+  assert.equal(result.reason, "startToCloseTimeout");
+});
+
+test("calculateResult: totalRuntimeMS exactly equal to scheduleToCloseTimeout still bails out on that attempt", () => {
+  // Boundary case for the >= comparison on accumulated runtime.
+  // After attempt 1: runtime 1000 ms + retry interval 2000 ms (initialInterval
+  // × backoffCoefficient) = exactly 3000 ms, matching scheduleToCloseTimeout.
+  // The cap should fire here (attempts=1), not on a later iteration where
+  // totalRuntimeMS strictly exceeds the cap.
+  const state = {
+    ...DEFAULTS,
+    initialInterval: new Duration(1, "s"),
+    scheduleToCloseTimeout: new Duration(3000, "ms"),
+    retries: [
+      { success: false, runtime: new Duration(1, "s") },
+      { success: false, runtime: new Duration(1, "s") },
+    ],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, false);
+  assert.equal(result.reason, "scheduleToCloseTimeout");
+  assert.equal(result.attempts, 1);
+});
+
 test("calculateResult: maximumAttempts limits retries", () => {
   const state = {
     ...DEFAULTS,
