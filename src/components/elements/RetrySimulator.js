@@ -689,6 +689,15 @@ export default function RetrySimulator() {
                 </span>
               </div>
             )}
+            {success === null && (
+              <div className={styles.resultRow}>
+                <span className={styles.resultLabel}>Details</span>
+                <span className={styles.resultValue}>
+                  Set a <a href="/encyclopedia/detecting-activity-failures#schedule-to-close-timeout" target="_blank" rel="noopener noreferrer">Schedule-To-Close Timeout</a>
+                  {" "}or <a href="/encyclopedia/retry-policies#maximum-attempts" target="_blank" rel="noopener noreferrer">Maximum Attempts</a> to bound the number of attempts.
+                </span>
+              </div>
+            )}
             <div className={styles.resultRow}>
               <span className={styles.resultLabel}>Time Elapsed</span>
               <span className={styles.resultValue}>
