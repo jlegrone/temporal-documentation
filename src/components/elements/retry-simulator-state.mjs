@@ -1,4 +1,4 @@
-export const DEFAULT_STATE = {
+const DEFAULT_STATE = {
   retries: [{ success: true, runtimeMS: 1 }],
   language: "typescript",
   scheduleToStartTimeout: 0,
@@ -76,7 +76,7 @@ export function encodeStateToParams(state) {
 
 export function decodeStateFromParams(search) {
   const params = new URLSearchParams(search);
-  const out = {};
+  const out = { ...DEFAULT_STATE };
   for (const key of NUMERIC_FIELDS) {
     if (!params.has(key)) continue;
     const value = Number(params.get(key));
@@ -96,5 +96,5 @@ export function decodeStateFromParams(search) {
       out.retries = retries;
     }
   }
-  return Object.keys(out).length > 0 ? out : null;
+  return out;
 }

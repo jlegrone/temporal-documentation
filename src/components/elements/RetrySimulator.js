@@ -4,7 +4,6 @@ import React, { useState, useCallback, useEffect, useRef } from "react";
 import styles from "./retry-simulator.module.css";
 import { useColorMode } from "@docusaurus/theme-common";
 import {
-  DEFAULT_STATE,
   encodeStateToParams,
   decodeStateFromParams,
 } from "./retry-simulator-state.mjs";
@@ -50,7 +49,7 @@ func TestActivity(ctx context.Context, url string) error {
 );
 
 export default function RetrySimulator() {
-  const [state, setState] = useState(DEFAULT_STATE);
+  const [state, setState] = useState(() => decodeStateFromParams(""));
   const chartCanvas = useRef(null);
   const hasHydratedFromUrl = useRef(false);
   const { colorMode } = useColorMode();
@@ -207,10 +206,7 @@ export default function RetrySimulator() {
     if (typeof window === "undefined") {
       return;
     }
-    const decoded = decodeStateFromParams(window.location.search);
-    if (decoded) {
-      setState({ ...DEFAULT_STATE, ...decoded });
-    }
+    setState(decodeStateFromParams(window.location.search));
   }, []);
 
   useEffect(function persistStateToUrl() {

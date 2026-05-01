@@ -1,27 +1,42 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  DEFAULT_STATE,
   encodeStateToParams,
   decodeStateFromParams,
 } from "./retry-simulator-state.mjs";
 
+const DEFAULTS = decodeStateFromParams("");
+
 function roundTrip(state) {
-  const decoded = decodeStateFromParams(encodeStateToParams(state).toString());
-  return { ...DEFAULT_STATE, ...(decoded ?? {}) };
+  return decodeStateFromParams(encodeStateToParams(state).toString());
 }
 
+test("empty input decodes to a complete default state", () => {
+  assert.deepEqual(DEFAULTS, {
+    retries: [{ success: true, runtimeMS: 1 }],
+    language: "typescript",
+    scheduleToStartTimeout: 0,
+    scheduleToCloseTimeout: 0,
+    startToCloseTimeout: 10000,
+    backoffCoefficient: 2,
+    initialInterval: 1000,
+    scheduleTime: 0,
+    maximumAttempts: 0,
+    maximumInterval: 0,
+  });
+});
+
 test("default state round-trips to itself", () => {
-  assert.deepEqual(roundTrip(DEFAULT_STATE), DEFAULT_STATE);
+  assert.deepEqual(roundTrip(DEFAULTS), DEFAULTS);
 });
 
 test("default state encodes to no query params", () => {
-  assert.equal(encodeStateToParams(DEFAULT_STATE).toString(), "");
+  assert.equal(encodeStateToParams(DEFAULTS).toString(), "");
 });
 
 test("non-default scalars round-trip", () => {
   const state = {
-    ...DEFAULT_STATE,
+    ...DEFAULTS,
     scheduleToStartTimeout: 2000,
     scheduleToCloseTimeout: 30000,
     startToCloseTimeout: 15000,
@@ -36,14 +51,14 @@ test("non-default scalars round-trip", () => {
 
 test("language round-trips for both supported values", () => {
   for (const language of ["typescript", "go"]) {
-    const state = { ...DEFAULT_STATE, language };
+    const state = { ...DEFAULTS, language };
     assert.deepEqual(roundTrip(state), state);
   }
 });
 
 test("retries round-trip with mixed outcomes", () => {
   const state = {
-    ...DEFAULT_STATE,
+    ...DEFAULTS,
     retries: [
       { success: false, runtimeMS: 100 },
       { success: false, runtimeMS: 200 },
@@ -55,7 +70,7 @@ test("retries round-trip with mixed outcomes", () => {
 
 test("single-failure retry round-trips", () => {
   const state = {
-    ...DEFAULT_STATE,
+    ...DEFAULTS,
     retries: [{ success: false, runtimeMS: 42 }],
   };
   assert.deepEqual(roundTrip(state), state);
@@ -82,7 +97,7 @@ test("full non-default state round-trips end-to-end", () => {
 
 test("encoded params do not include fields equal to defaults", () => {
   const state = {
-    ...DEFAULT_STATE,
+    ...DEFAULTS,
     initialInterval: 2500,
     language: "go",
   };
@@ -93,20 +108,17 @@ test("encoded params do not include fields equal to defaults", () => {
   );
 });
 
-test("malformed params decode to null and yield defaults", () => {
-  assert.equal(decodeStateFromParams("?retries=garbage&language=cobol&initialInterval=NaN"), null);
-  assert.deepEqual(roundTrip({
-    ...DEFAULT_STATE,
-    // simulate state already at defaults: round-trip still defaults
-  }), DEFAULT_STATE);
+test("malformed params yield defaults", () => {
+  assert.deepEqual(
+    decodeStateFromParams("?retries=garbage&language=cobol&initialInterval=NaN"),
+    DEFAULTS
+  );
 });
 
 test("partial params merge over defaults without losing other fields", () => {
-  const search = "?initialInterval=2500&language=go";
-  const decoded = decodeStateFromParams(search);
-  const merged = { ...DEFAULT_STATE, ...decoded };
-  assert.deepEqual(merged, {
-    ...DEFAULT_STATE,
+  const decoded = decodeStateFromParams("?initialInterval=2500&language=go");
+  assert.deepEqual(decoded, {
+    ...DEFAULTS,
     initialInterval: 2500,
     language: "go",
   });
@@ -114,7 +126,7 @@ test("partial params merge over defaults without losing other fields", () => {
 
 test("retries=fail:100,fail:200,succeed:50 decodes correctly", () => {
   const decoded = decodeStateFromParams("?retries=fail:100,fail:200,succeed:50");
-  assert.deepEqual(decoded?.retries, [
+  assert.deepEqual(decoded.retries, [
     { success: false, runtimeMS: 100 },
     { success: false, runtimeMS: 200 },
     { success: true, runtimeMS: 50 },
