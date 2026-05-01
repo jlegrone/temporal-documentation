@@ -116,6 +116,40 @@ test("encoded params omit maximumInterval when it matches 100 × initialInterval
   );
 });
 
+test("each numeric field round-trips in isolation", () => {
+  // For every numeric/duration field, swap the default for a non-default
+  // value, encode, decode, and confirm the value survives. This catches
+  // wrong-variable bugs in encode/decode that fixed-shape tests miss.
+  const cases = [
+    { field: "scheduleToStartTimeout", value: new Duration(2, "s") },
+    { field: "scheduleToCloseTimeout", value: new Duration(45, "m") },
+    { field: "startToCloseTimeout", value: new Duration(15, "s") },
+    { field: "backoffCoefficient", value: 4 },
+    { field: "initialInterval", value: new Duration(2500, "ms") },
+    { field: "scheduleTime", value: new Duration(250, "ms") },
+    { field: "maximumAttempts", value: 5 },
+    { field: "maximumInterval", value: new Duration(60, "s") },
+  ];
+  for (const { field, value } of cases) {
+    const state = { ...DEFAULTS, [field]: value };
+    const decoded = roundTrip(state);
+    if (value instanceof Duration) {
+      assert.ok(
+        decoded[field] instanceof Duration,
+        `${field}: decoded value should be a Duration`
+      );
+      assert.equal(
+        decoded[field].toMilliseconds(),
+        value.toMilliseconds(),
+        `${field}: ms value mismatch after round-trip`
+      );
+      assert.equal(decoded[field].unit, value.unit, `${field}: unit mismatch after round-trip`);
+    } else {
+      assert.equal(decoded[field], value, `${field}: value mismatch after round-trip`);
+    }
+  }
+});
+
 test("encoded params include maximumInterval when it diverges from the default", () => {
   const state = {
     ...DEFAULTS,
@@ -355,6 +389,61 @@ test("calculateResult: startToCloseTimeout=0 does not abort the chain", () => {
     startToCloseTimeout: new Duration(0, "s"),
     scheduleToCloseTimeout: new Duration(1_000_000_000, "ms"),
     retries: [{ success: true, runtime: new Duration(5000, "ms") }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, true);
+});
+
+test("calculateResult: per-attempt runtime ≥ startToCloseTimeout returns startToCloseTimeout reason", () => {
+  const state = {
+    ...DEFAULTS,
+    startToCloseTimeout: new Duration(50, "ms"),
+    retries: [{ success: false, runtime: new Duration(100, "ms") }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, false);
+  assert.equal(result.reason, "startToCloseTimeout");
+  assert.equal(result.attempts, 1);
+});
+
+test("calculateResult: per-attempt runtime < startToCloseTimeout proceeds normally", () => {
+  // Runtime stays under the cap, so the simulation should succeed.
+  const state = {
+    ...DEFAULTS,
+    startToCloseTimeout: new Duration(1000, "ms"),
+    retries: [{ success: true, runtime: new Duration(100, "ms") }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, true);
+});
+
+test("calculateResult: scheduleTime ≥ scheduleToStartTimeout returns scheduleTime reason", () => {
+  const state = {
+    ...DEFAULTS,
+    scheduleToStartTimeout: new Duration(100, "ms"),
+    scheduleTime: new Duration(150, "ms"),
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, false);
+  assert.equal(result.reason, "scheduleTime");
+  assert.equal(result.attempts, 0);
+});
+
+test("calculateResult: scheduleTime < scheduleToStartTimeout does not bail out", () => {
+  const state = {
+    ...DEFAULTS,
+    scheduleToStartTimeout: new Duration(1000, "ms"),
+    scheduleTime: new Duration(50, "ms"),
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, true);
+});
+
+test("calculateResult: scheduleToStartTimeout=0 ignores scheduleTime entirely", () => {
+  const state = {
+    ...DEFAULTS,
+    scheduleToStartTimeout: new Duration(0, "s"),
+    scheduleTime: new Duration(60, "m"),
   };
   const result = calculateResult(state);
   assert.equal(result.success, true);
