@@ -153,7 +153,34 @@ test("retries=fail:100,fail:200,succeed:50 decodes correctly", () => {
 
 test("calculateResult: succeeds on first attempt with default state", () => {
   const result = calculateResult(DEFAULTS);
-  assert.deepEqual(result, { success: true, runtimeMS: 1 });
+  assert.deepEqual(result, { success: true, runtimeMS: 1, attempts: 1 });
+});
+
+test("calculateResult: reports the attempt count for a successful chain", () => {
+  const state = {
+    ...DEFAULTS,
+    scheduleToCloseTimeout: 1_000_000_000,
+    retries: [
+      { success: false, runtimeMS: 10 },
+      { success: false, runtimeMS: 10 },
+      { success: true, runtimeMS: 10 },
+    ],
+  };
+  assert.equal(calculateResult(state).attempts, 3);
+});
+
+test("calculateResult: reports the attempt count when capped by maximumAttempts", () => {
+  const state = {
+    ...DEFAULTS,
+    scheduleToCloseTimeout: 1_000_000_000,
+    maximumAttempts: 2,
+    retries: [
+      { success: false, runtimeMS: 1 },
+      { success: false, runtimeMS: 1 },
+      { success: true, runtimeMS: 1 },
+    ],
+  };
+  assert.equal(calculateResult(state).attempts, 2);
 });
 
 test("calculateResult: maximumInterval caps the retry interval growth", () => {

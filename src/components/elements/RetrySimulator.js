@@ -158,7 +158,7 @@ export default function RetrySimulator() {
     setState({ ...state, language });
   });
 
-  const { success, runtimeMS, reason } = calculateResult(state);
+  const { success, runtimeMS, reason, attempts } = calculateResult(state);
   const code = retryPolicyCode(state);
 
   useEffect(
@@ -356,7 +356,8 @@ export default function RetrySimulator() {
         <div className={styles.retryCol}>
           <div className={styles.result + " " + (success ? styles.success : styles.fail)}>
             <h3 className={styles.resultText}>
-              {success ? "Success" : "Failed"} after {runtimeMS} ms
+              {success ? "Success" : "Failed"} after {runtimeMS} ms ({attempts}{" "}
+              {attempts === 1 ? "attempt" : "attempts"})
               {success ? "" : ": " + reason}
             </h3>
           </div>

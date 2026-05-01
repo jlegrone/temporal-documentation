@@ -107,6 +107,7 @@ export function calculateResult(state) {
     return {
       success: false,
       runtimeMS: scheduleToStartTimeout,
+      attempts: 0,
       reason: "scheduleTime",
     };
   }
@@ -122,6 +123,7 @@ export function calculateResult(state) {
       return {
         success: false,
         runtimeMS: totalRuntimeMS,
+        attempts: i + 1,
         reason: "startToCloseTimeout",
       };
     }
@@ -131,6 +133,7 @@ export function calculateResult(state) {
         return {
           success: false,
           runtimeMS: totalRuntimeMS,
+          attempts: i + 1,
           reason: "maximumAttempts",
         };
       }
@@ -139,6 +142,7 @@ export function calculateResult(state) {
         return {
           success: false,
           runtimeMS: totalRuntimeMS,
+          attempts: i + 1,
           reason: "All retries failed",
         };
       }
@@ -151,6 +155,7 @@ export function calculateResult(state) {
         return {
           success: false,
           runtimeMS: totalRuntimeMS,
+          attempts: i + 1,
           reason: "scheduleToCloseTimeout",
         };
       }
@@ -161,12 +166,14 @@ export function calculateResult(state) {
     return {
       success: false,
       runtimeMS: 0,
+      attempts: 0,
       reason: "No retries",
     };
   }
 
   return {
     success: true,
+    attempts: state.retries.length,
     runtimeMS: totalRuntimeMS,
   };
 }
