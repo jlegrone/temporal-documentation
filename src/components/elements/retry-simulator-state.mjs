@@ -411,16 +411,22 @@ export function calculateResult(state, options = {}) {
     entryElapsedMS += attemptElapsed;
     entryAttemptsUsed += 1;
 
+    const attemptOutcome = timedOut ? "timedOut" : isSuccess ? "succeeded" : "failed";
     if (timeline && timeline.length < trackLimit) {
       timeline.push({
         startMS: attemptStartMS,
         elapsedMS: attemptElapsed,
-        outcome: timedOut ? "timedOut" : isSuccess ? "succeeded" : "failed",
+        outcome: attemptOutcome,
       });
     }
 
     if (isSuccess) {
-      return withTimeline({ success: true, runtimeMS: totalRuntimeMS, attempts: i + 1 });
+      return withTimeline({
+        success: true,
+        runtimeMS: totalRuntimeMS,
+        attempts: i + 1,
+        lastAttemptOutcome: attemptOutcome,
+      });
     }
 
     if (maximumAttempts > 0 && i + 1 >= maximumAttempts) {
@@ -429,6 +435,7 @@ export function calculateResult(state, options = {}) {
         runtimeMS: totalRuntimeMS,
         attempts: i + 1,
         reason: "maximumAttempts",
+        lastAttemptOutcome: attemptOutcome,
       });
     }
 
@@ -444,6 +451,7 @@ export function calculateResult(state, options = {}) {
         runtimeMS: scheduleToCloseTimeout,
         attempts: i + 1,
         reason: "scheduleToCloseTimeout",
+        lastAttemptOutcome: attemptOutcome,
       });
     }
 

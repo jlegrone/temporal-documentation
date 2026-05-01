@@ -88,6 +88,23 @@ function resultStatusLabel(success, reason) {
   }
 }
 
+// The Workflow History event that the Server records for the activity's
+// terminal outcome. Mirrors the per-attempt OUTCOME_EVENT_TYPE mapping but
+// also accounts for chain-end reasons that fire before any attempt runs (e.g.
+// scheduleToStartTimeout).
+function resultEventType(success, reason, lastAttemptOutcome) {
+  if (success === null) return null;
+  if (success === true) return "ActivityTaskCompleted";
+  if (reason === "scheduleToCloseTimeout" || reason === "scheduleTime") {
+    return "ActivityTaskTimedOut";
+  }
+  // For maximumAttempts / activity-reported failures, the event mirrors the
+  // last attempt's outcome — a startToCloseTimeout-killed attempt records as
+  // ActivityTaskTimedOut even when the chain ended via maximumAttempts.
+  if (lastAttemptOutcome === "timedOut") return "ActivityTaskTimedOut";
+  return "ActivityTaskFailed";
+}
+
 const languageSamples = new Map([]);
 languageSamples.set(
   "typescript",
@@ -349,8 +366,9 @@ export default function RetrySimulator() {
     setState({ ...state, language });
   });
 
-  const { success, runtimeMS, reason, attempts } = calculateResult(state);
+  const { success, runtimeMS, reason, attempts, lastAttemptOutcome } = calculateResult(state);
   const code = retryPolicyCode(state);
+  const eventType = resultEventType(success, reason, lastAttemptOutcome);
 
   useEffect(
     function initializeChart() {
@@ -621,6 +639,12 @@ export default function RetrySimulator() {
               <span className={styles.resultLabel}>Status</span>
               <span className={styles.resultValue}>{resultStatusLabel(success, reason)}</span>
             </div>
+            {eventType && (
+              <div className={styles.resultRow}>
+                <span className={styles.resultLabel}>Result</span>
+                <span className={styles.resultValue}>{eventType}</span>
+              </div>
+            )}
             <div className={styles.resultRow}>
               <span className={styles.resultLabel}>Time Elapsed</span>
               <span className={styles.resultValue}>

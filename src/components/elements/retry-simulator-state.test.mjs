@@ -398,7 +398,12 @@ test("retries=fail:100,fail:200,succeed:50 decodes correctly (legacy bare-ms for
 
 test("calculateResult: succeeds on first attempt with default state", () => {
   const result = calculateResult(DEFAULTS);
-  assert.deepEqual(result, { success: true, runtimeMS: 1000, attempts: 1 });
+  assert.deepEqual(result, {
+    success: true,
+    runtimeMS: 1000,
+    attempts: 1,
+    lastAttemptOutcome: "succeeded",
+  });
 });
 
 test("calculateResult: reports the attempt count for a successful chain", () => {
@@ -764,6 +769,38 @@ test("calculateResult: attemptTimeline elapsedMS clamps at startToCloseTimeout",
     assert.equal(a.elapsedMS, 2000);
     assert.equal(a.outcome, "timedOut");
   }
+});
+
+test("calculateResult: lastAttemptOutcome reflects the final attempt's outcome", () => {
+  // Success: lastAttemptOutcome = "succeeded".
+  const successResult = calculateResult({
+    ...DEFAULTS,
+    scheduleToCloseTimeout: new Duration(1_000_000, "ms"),
+    retries: [{ success: true, runtime: new Duration(100, "ms") }],
+  });
+  assert.equal(successResult.lastAttemptOutcome, "succeeded");
+
+  // maximumAttempts hit on a startToCloseTimeout-killed attempt: outcome is
+  // "timedOut" so the workflow history event type stays ActivityTaskTimedOut.
+  const timedOutResult = calculateResult({
+    ...DEFAULTS,
+    startToCloseTimeout: new Duration(2, "s"),
+    scheduleToCloseTimeout: new Duration(1_000_000, "ms"),
+    maximumAttempts: 2,
+    retries: [{ success: true, runtime: new Duration(5, "s") }],
+  });
+  assert.equal(timedOutResult.lastAttemptOutcome, "timedOut");
+  assert.equal(timedOutResult.reason, "maximumAttempts");
+
+  // Plain failed attempt at maximumAttempts: outcome "failed".
+  const failedResult = calculateResult({
+    ...DEFAULTS,
+    scheduleToCloseTimeout: new Duration(1_000_000, "ms"),
+    maximumAttempts: 1,
+    retries: [{ success: false, runtime: new Duration(100, "ms") }],
+  });
+  assert.equal(failedResult.lastAttemptOutcome, "failed");
+  assert.equal(failedResult.reason, "maximumAttempts");
 });
 
 test("calculateResult: trackOutcomes caps attemptTimeline length", () => {
