@@ -306,7 +306,9 @@ test("calculateResult: failure-only chain with no terminating condition reports 
   assert.equal(result.reason, "neverTerminates");
 });
 
-test("calculateResult: failure-only chain falls back to All retries failed when maximumAttempts is set", () => {
+test("calculateResult: projects beyond configured failures until maximumAttempts fires", () => {
+  // 5 configured failures; the simulator should keep projecting failures until
+  // it actually hits the maximumAttempts cap.
   const state = {
     ...DEFAULTS,
     maximumAttempts: 100,
@@ -314,10 +316,13 @@ test("calculateResult: failure-only chain falls back to All retries failed when 
   };
   const result = calculateResult(state);
   assert.equal(result.success, false);
-  assert.equal(result.reason, "All retries failed");
+  assert.equal(result.reason, "maximumAttempts");
+  assert.equal(result.attempts, 100);
 });
 
-test("calculateResult: failure-only chain falls back to All retries failed when scheduleToCloseTimeout is set", () => {
+test("calculateResult: projects beyond configured failures until scheduleToCloseTimeout fires", () => {
+  // 5 configured failures; with maximumAttempts unbounded, we project until
+  // the scheduleToCloseTimeout actually closes the chain.
   const state = {
     ...DEFAULTS,
     scheduleToCloseTimeout: new Duration(1_000_000, "ms"),
@@ -325,7 +330,8 @@ test("calculateResult: failure-only chain falls back to All retries failed when 
   };
   const result = calculateResult(state);
   assert.equal(result.success, false);
-  assert.equal(result.reason, "All retries failed");
+  assert.equal(result.reason, "scheduleToCloseTimeout");
+  assert.ok(result.attempts > 5);
 });
 
 test("calculateResult: scheduleToCloseTimeout=0 does not abort the chain", () => {

@@ -259,11 +259,50 @@ export function calculateResult(state) {
     }))
   );
 
+  if (flatRetries.length === 0) {
+    return { success: false, runtimeMS: 0, attempts: 0, reason: "No retries" };
+  }
+
+  // If the configured chain ends in a failure, the user is implicitly saying
+  // "and it would keep failing this way." We project additional failures with
+  // the last failure's runtime until something terminates the chain.
+  const lastConfigured = flatRetries[flatRetries.length - 1];
+  const projectedRuntimeMS = lastConfigured.success ? null : lastConfigured.runtimeMS;
+
+  // Detect the open-ended infinite case up front so we don't spin in the
+  // projection loop below. (No max attempts, no end-to-end timeout, and the
+  // per-attempt runtime stays below startToCloseTimeout.)
+  if (projectedRuntimeMS != null) {
+    const startToCloseSafe =
+      startToCloseTimeout === 0 || projectedRuntimeMS < startToCloseTimeout;
+    if (maximumAttempts === 0 && scheduleToCloseTimeout === 0 && startToCloseSafe) {
+      return { success: null, runtimeMS: 0, attempts: Infinity, reason: "neverTerminates" };
+    }
+  }
+
+  // Hard cap to defend against pathological configs that slip past the
+  // neverTerminates check (e.g. astronomical scheduleToCloseTimeout). At that
+  // point reporting "neverTerminates" is more honest than running forever.
+  const PROJECTION_GUARD = 1_000_000;
+
   let retryIntervalMS = initialInterval;
   let totalRuntimeMS = 0;
 
-  for (let i = 0; i < flatRetries.length; ++i) {
-    const currentRetryRuntime = flatRetries[i].runtimeMS;
+  for (let i = 0; ; ++i) {
+    let currentRetryRuntime;
+    let isSuccess;
+    if (i < flatRetries.length) {
+      currentRetryRuntime = flatRetries[i].runtimeMS;
+      isSuccess = flatRetries[i].success;
+    } else {
+      // Beyond the configured chain — project further failures.
+      if (projectedRuntimeMS == null || i >= flatRetries.length + PROJECTION_GUARD) {
+        return { success: null, runtimeMS: totalRuntimeMS, attempts: Infinity, reason: "neverTerminates" };
+      }
+      currentRetryRuntime = projectedRuntimeMS;
+      isSuccess = false;
+    }
+
     totalRuntimeMS += currentRetryRuntime;
 
     if (startToCloseTimeout > 0 && currentRetryRuntime >= startToCloseTimeout) {
@@ -275,67 +314,31 @@ export function calculateResult(state) {
       };
     }
 
-    if (!flatRetries[i].success) {
-      if (maximumAttempts > 0 && i + 1 >= maximumAttempts) {
-        return {
-          success: false,
-          runtimeMS: totalRuntimeMS,
-          attempts: i + 1,
-          reason: "maximumAttempts",
-        };
-      }
+    if (isSuccess) {
+      return { success: true, runtimeMS: totalRuntimeMS, attempts: i + 1 };
+    }
 
-      if (i + 1 >= flatRetries.length) {
-        // No follow-up retry is configured. If nothing else would ever
-        // terminate the chain, treat this as an open-ended infinite retry
-        // loop rather than a definite failure.
-        const startToCloseSafe =
-          startToCloseTimeout === 0 || currentRetryRuntime < startToCloseTimeout;
-        if (maximumAttempts === 0 && scheduleToCloseTimeout === 0 && startToCloseSafe) {
-          return {
-            success: null,
-            runtimeMS: totalRuntimeMS,
-            attempts: Infinity,
-            reason: "neverTerminates",
-          };
-        }
-        return {
-          success: false,
-          runtimeMS: totalRuntimeMS,
-          attempts: i + 1,
-          reason: "All retries failed",
-        };
-      }
+    if (maximumAttempts > 0 && i + 1 >= maximumAttempts) {
+      return {
+        success: false,
+        runtimeMS: totalRuntimeMS,
+        attempts: i + 1,
+        reason: "maximumAttempts",
+      };
+    }
 
-      retryIntervalMS = Math.min(retryIntervalMS * backoffCoefficient, maximumInterval);
+    retryIntervalMS = Math.min(retryIntervalMS * backoffCoefficient, maximumInterval);
+    totalRuntimeMS += retryIntervalMS;
 
-      totalRuntimeMS += retryIntervalMS;
-
-      if (scheduleToCloseTimeout > 0 && totalRuntimeMS >= scheduleToCloseTimeout) {
-        return {
-          success: false,
-          runtimeMS: totalRuntimeMS,
-          attempts: i + 1,
-          reason: "scheduleToCloseTimeout",
-        };
-      }
+    if (scheduleToCloseTimeout > 0 && totalRuntimeMS >= scheduleToCloseTimeout) {
+      return {
+        success: false,
+        runtimeMS: totalRuntimeMS,
+        attempts: i + 1,
+        reason: "scheduleToCloseTimeout",
+      };
     }
   }
-
-  if (flatRetries.length === 0) {
-    return {
-      success: false,
-      runtimeMS: 0,
-      attempts: 0,
-      reason: "No retries",
-    };
-  }
-
-  return {
-    success: true,
-    attempts: flatRetries.length,
-    runtimeMS: totalRuntimeMS,
-  };
 }
 
 export function decodeStateFromParams(search) {
