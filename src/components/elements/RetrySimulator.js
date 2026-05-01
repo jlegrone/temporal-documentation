@@ -129,7 +129,6 @@ export default function RetrySimulator() {
     const labels = [];
     const values = [];
     maximumAttempts = maximumAttempts === 0 ? 10 : maximumAttempts;
-    maximumInterval = maximumInterval === 0 ? 100 * initialInterval : maximumInterval;
     let interval = initialInterval;
     for (let i = 0; i < maximumAttempts; ++i) {
       interval = Math.min(interval, maximumInterval);
@@ -451,7 +450,8 @@ function retryPolicyCode(state) {
   if (value.retryPolicy.maximumAttempts === 0) {
     delete value.retryPolicy.maximumAttempts;
   }
-  if (value.retryPolicy.maximumInterval === 0) {
+  // Omit maximumInterval when it matches the SDK default (100 × initialInterval).
+  if (value.retryPolicy.maximumInterval === 100 * value.retryPolicy.initialInterval) {
     delete value.retryPolicy.maximumInterval;
   }
   if (value.scheduleToStartTimeout === 0) {

@@ -1,3 +1,9 @@
+// SDK Retry Policy default: Maximum Interval = 100 × Initial Interval.
+// (https://docs.temporal.io/encyclopedia/retry-policies#default-values-for-retry-policy)
+const MAX_INTERVAL_MULTIPLIER = 100;
+
+const DEFAULT_INITIAL_INTERVAL = 1000;
+
 const DEFAULT_STATE = {
   retries: [{ success: true, runtimeMS: 1 }],
   language: "typescript",
@@ -5,10 +11,10 @@ const DEFAULT_STATE = {
   scheduleToCloseTimeout: 0,
   startToCloseTimeout: 10000,
   backoffCoefficient: 2,
-  initialInterval: 1000,
+  initialInterval: DEFAULT_INITIAL_INTERVAL,
   scheduleTime: 0,
   maximumAttempts: 0,
-  maximumInterval: 0,
+  maximumInterval: MAX_INTERVAL_MULTIPLIER * DEFAULT_INITIAL_INTERVAL,
 };
 
 const NUMERIC_FIELDS = [
@@ -58,10 +64,21 @@ function retriesEqualDefault(retries) {
   return true;
 }
 
+function defaultMaximumInterval(initialInterval) {
+  return MAX_INTERVAL_MULTIPLIER * initialInterval;
+}
+
+function fieldDefault(key, state) {
+  if (key === "maximumInterval") {
+    return defaultMaximumInterval(state.initialInterval);
+  }
+  return DEFAULT_STATE[key];
+}
+
 export function encodeStateToParams(state) {
   const params = new URLSearchParams();
   for (const key of NUMERIC_FIELDS) {
-    if (state[key] !== DEFAULT_STATE[key]) {
+    if (state[key] !== fieldDefault(key, state)) {
       params.set(key, String(state[key]));
     }
   }
@@ -81,11 +98,10 @@ export function calculateResult(state) {
     scheduleToStartTimeout,
     scheduleTime,
     initialInterval,
+    maximumInterval,
     maximumAttempts,
     backoffCoefficient,
   } = state;
-  // When unset, the SDK default Maximum Interval is 100 × Initial Interval.
-  const maximumInterval = state.maximumInterval === 0 ? 100 * initialInterval : state.maximumInterval;
 
   if (scheduleToStartTimeout > 0 && scheduleTime >= scheduleToStartTimeout) {
     return {
@@ -176,6 +192,11 @@ export function decodeStateFromParams(search) {
     if (retries) {
       out.retries = retries;
     }
+  }
+  // Resolve the SDK default for maximumInterval against whatever
+  // initialInterval the URL ended up with.
+  if (!params.has("maximumInterval")) {
+    out.maximumInterval = defaultMaximumInterval(out.initialInterval);
   }
   return out;
 }

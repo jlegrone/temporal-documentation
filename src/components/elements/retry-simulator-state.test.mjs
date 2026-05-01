@@ -23,7 +23,9 @@ test("empty input decodes to a complete default state", () => {
     initialInterval: 1000,
     scheduleTime: 0,
     maximumAttempts: 0,
-    maximumInterval: 0,
+    // SDK default: 100 × initialInterval (matches the docs at
+    // https://docs.temporal.io/encyclopedia/retry-policies#default-values-for-retry-policy).
+    maximumInterval: 100000,
   });
 });
 
@@ -96,10 +98,13 @@ test("full non-default state round-trips end-to-end", () => {
   assert.deepEqual(roundTrip(state), state);
 });
 
-test("encoded params do not include fields equal to defaults", () => {
+test("encoded params omit maximumInterval when it matches 100 × initialInterval", () => {
+  // A non-default initialInterval combined with the matching SDK-default
+  // maximumInterval should still leave maximumInterval out of the URL.
   const state = {
     ...DEFAULTS,
     initialInterval: 2500,
+    maximumInterval: 100 * 2500,
     language: "go",
   };
   const params = encodeStateToParams(state);
@@ -109,6 +114,12 @@ test("encoded params do not include fields equal to defaults", () => {
   );
 });
 
+test("encoded params include maximumInterval when it diverges from the default", () => {
+  const state = { ...DEFAULTS, initialInterval: 2500, maximumInterval: 12345 };
+  const params = encodeStateToParams(state);
+  assert.equal(params.get("maximumInterval"), "12345");
+});
+
 test("malformed params yield defaults", () => {
   assert.deepEqual(
     decodeStateFromParams("?retries=garbage&language=cobol&initialInterval=NaN"),
@@ -116,13 +127,19 @@ test("malformed params yield defaults", () => {
   );
 });
 
-test("partial params merge over defaults without losing other fields", () => {
+test("partial params merge over defaults — maximumInterval tracks decoded initialInterval", () => {
   const decoded = decodeStateFromParams("?initialInterval=2500&language=go");
   assert.deepEqual(decoded, {
     ...DEFAULTS,
     initialInterval: 2500,
+    maximumInterval: 100 * 2500,
     language: "go",
   });
+});
+
+test("explicit maximumInterval in URL overrides the computed default", () => {
+  const decoded = decodeStateFromParams("?initialInterval=500&maximumInterval=10000");
+  assert.equal(decoded.maximumInterval, 10000);
 });
 
 test("retries=fail:100,fail:200,succeed:50 decodes correctly", () => {
@@ -134,46 +151,13 @@ test("retries=fail:100,fail:200,succeed:50 decodes correctly", () => {
   ]);
 });
 
-test("calculateResult: maximumInterval=0 caps at 100 × initialInterval", () => {
-  // initialInterval=1000, max attempts large enough for the cap to take effect.
-  // Retry intervals would be 1000, 2000, ..., 64000, then capped at 100000.
-  // Five failures means total = sum of intervals 1000+2000+4000+8000+16000 +
-  //   per-attempt runtimes. We verify by computing the expected total against
-  //   a state where maximumInterval is explicitly set to 100000 — they must agree.
-  const state = {
-    ...DEFAULTS,
-    scheduleToCloseTimeout: 1_000_000_000,
-    retries: [
-      { success: false, runtimeMS: 10 },
-      { success: false, runtimeMS: 10 },
-      { success: false, runtimeMS: 10 },
-      { success: true, runtimeMS: 10 },
-    ],
-  };
-  const explicit = { ...state, maximumInterval: 100 * state.initialInterval };
-  assert.deepEqual(calculateResult(state), calculateResult(explicit));
+test("calculateResult: succeeds on first attempt with default state", () => {
+  const result = calculateResult(DEFAULTS);
+  assert.deepEqual(result, { success: true, runtimeMS: 1 });
 });
 
-test("calculateResult: maximumInterval=0 cap tracks initialInterval", () => {
-  // With initialInterval=500, the cap should be 50000 (not 100000).
-  // Use an explicit max of 50000 as the expected baseline.
-  const state = {
-    ...DEFAULTS,
-    initialInterval: 500,
-    scheduleToCloseTimeout: 1_000_000_000,
-    retries: [
-      { success: false, runtimeMS: 1 },
-      { success: false, runtimeMS: 1 },
-      { success: false, runtimeMS: 1 },
-      { success: true, runtimeMS: 1 },
-    ],
-  };
-  const explicit = { ...state, maximumInterval: 100 * state.initialInterval };
-  assert.deepEqual(calculateResult(state), calculateResult(explicit));
-});
-
-test("calculateResult: explicit maximumInterval overrides the default cap", () => {
-  // When maximumInterval is set, it should take precedence over 100×initialInterval.
+test("calculateResult: maximumInterval caps the retry interval growth", () => {
+  // Tight cap accumulates less retry-interval time than a loose one.
   const baseState = {
     ...DEFAULTS,
     scheduleToCloseTimeout: 1_000_000_000,
@@ -187,13 +171,7 @@ test("calculateResult: explicit maximumInterval overrides the default cap", () =
   };
   const tightCap = { ...baseState, maximumInterval: 5000 };
   const looseCap = { ...baseState, maximumInterval: 1_000_000 };
-  // Tight cap accumulates less retry-interval time than loose cap.
   assert.ok(calculateResult(tightCap).runtimeMS < calculateResult(looseCap).runtimeMS);
-});
-
-test("calculateResult: succeeds on first attempt with default state", () => {
-  const result = calculateResult(DEFAULTS);
-  assert.deepEqual(result, { success: true, runtimeMS: 1 });
 });
 
 test("calculateResult: maximumAttempts limits retries", () => {
