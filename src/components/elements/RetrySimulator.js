@@ -646,16 +646,17 @@ export default function RetrySimulator() {
             updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
           <RetryPolicyParamInputs
-            param="maximumAttempts"
-            value={state.maximumAttempts}
+            param="maximumInterval"
+            value={state.maximumInterval}
+            min={state.initialInterval.toMilliseconds()}
+            max={100000}
+            step={100}
             updateRetryPolicyParam={updateRetryPolicyParam}
             updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
           <RetryPolicyParamInputs
-            param="maximumInterval"
-            value={state.maximumInterval}
-            max={100000}
-            step={100}
+            param="maximumAttempts"
+            value={state.maximumAttempts}
             updateRetryPolicyParam={updateRetryPolicyParam}
             updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
@@ -952,6 +953,9 @@ function RetryPolicyParamInputs({
           onChange={(ev) => updateRetryPolicyParam(param, ev)}
           className={styles.numberInput}
           type="number"
+          min={sliderMin}
+          max={sliderMax}
+          step={sliderStep}
         />
       </div>
       <div className={styles.parameterMeta}>
