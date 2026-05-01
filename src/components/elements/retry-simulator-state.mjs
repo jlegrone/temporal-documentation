@@ -74,6 +74,87 @@ export function encodeStateToParams(state) {
   return params;
 }
 
+export function calculateResult(state) {
+  const {
+    startToCloseTimeout,
+    scheduleToCloseTimeout,
+    scheduleToStartTimeout,
+    scheduleTime,
+    initialInterval,
+    maximumAttempts,
+    backoffCoefficient,
+  } = state;
+  // When unset, the SDK default Maximum Interval is 100 × Initial Interval.
+  const maximumInterval = state.maximumInterval === 0 ? 100 * initialInterval : state.maximumInterval;
+
+  if (scheduleToStartTimeout > 0 && scheduleTime >= scheduleToStartTimeout) {
+    return {
+      success: false,
+      runtimeMS: scheduleToStartTimeout,
+      reason: "scheduleTime",
+    };
+  }
+
+  let retryIntervalMS = initialInterval;
+  let totalRuntimeMS = 0;
+
+  for (let i = 0; i < state.retries.length; ++i) {
+    const currentRetryRuntime = state.retries[i].runtimeMS;
+    totalRuntimeMS += currentRetryRuntime;
+
+    if (currentRetryRuntime >= startToCloseTimeout) {
+      return {
+        success: false,
+        runtimeMS: totalRuntimeMS,
+        reason: "startToCloseTimeout",
+      };
+    }
+
+    if (!state.retries[i].success) {
+      if (maximumAttempts > 0 && i + 1 >= maximumAttempts) {
+        return {
+          success: false,
+          runtimeMS: totalRuntimeMS,
+          reason: "maximumAttempts",
+        };
+      }
+
+      if (i + 1 >= state.retries.length) {
+        return {
+          success: false,
+          runtimeMS: totalRuntimeMS,
+          reason: "All retries failed",
+        };
+      }
+
+      retryIntervalMS = Math.min(retryIntervalMS * backoffCoefficient, maximumInterval);
+
+      totalRuntimeMS += retryIntervalMS;
+
+      if (totalRuntimeMS >= scheduleToCloseTimeout) {
+        return {
+          success: false,
+          runtimeMS: totalRuntimeMS,
+          reason: "scheduleToCloseTimeout",
+        };
+      }
+    }
+  }
+
+  if (state.retries.length === 0) {
+    return {
+      success: false,
+      runtimeMS: 0,
+      reason: "No retries",
+    };
+  }
+
+  return {
+    success: true,
+    runtimeMS: totalRuntimeMS,
+  };
+}
+
 export function decodeStateFromParams(search) {
   const params = new URLSearchParams(search);
   const out = { ...DEFAULT_STATE };

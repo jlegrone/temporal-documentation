@@ -4,6 +4,7 @@ import React, { useState, useCallback, useEffect, useRef } from "react";
 import styles from "./retry-simulator.module.css";
 import { useColorMode } from "@docusaurus/theme-common";
 import {
+  calculateResult,
   encodeStateToParams,
   decodeStateFromParams,
 } from "./retry-simulator-state.mjs";
@@ -433,87 +434,6 @@ function RetryPolicyParamInputs({ param, value, updateRetryPolicyParam, min, max
       />
     </div>
   );
-}
-
-function calculateResult(state) {
-  const {
-    startToCloseTimeout,
-    scheduleToCloseTimeout,
-    scheduleToStartTimeout,
-    scheduleTime,
-    initialInterval,
-    maximumAttempts,
-    backoffCoefficient,
-  } = state;
-  // When unset, the SDK default Maximum Interval is 100 × Initial Interval.
-  const maximumInterval = state.maximumInterval === 0 ? 100 * initialInterval : state.maximumInterval;
-
-  if (scheduleToStartTimeout > 0 && scheduleTime >= scheduleToStartTimeout) {
-    return {
-      success: false,
-      runtimeMS: scheduleToStartTimeout,
-      reason: "scheduleTime",
-    };
-  }
-
-  let retryIntervalMS = state.initialInterval;
-  let totalRuntimeMS = 0;
-
-  for (let i = 0; i < state.retries.length; ++i) {
-    const currentRetryRuntime = state.retries[i].runtimeMS;
-    totalRuntimeMS += currentRetryRuntime;
-
-    if (currentRetryRuntime >= startToCloseTimeout) {
-      return {
-        success: false,
-        runtimeMS: totalRuntimeMS,
-        reason: "startToCloseTimeout",
-      };
-    }
-
-    if (!state.retries[i].success) {
-      if (maximumAttempts > 0 && i + 1 >= maximumAttempts) {
-        return {
-          success: false,
-          runtimeMS: totalRuntimeMS,
-          reason: "maximumAttempts",
-        };
-      }
-
-      if (i + 1 >= state.retries.length) {
-        return {
-          success: false,
-          runtimeMS: totalRuntimeMS,
-          reason: "All retries failed",
-        };
-      }
-
-      retryIntervalMS = Math.min(retryIntervalMS * backoffCoefficient, maximumInterval);
-
-      totalRuntimeMS += retryIntervalMS;
-
-      if (totalRuntimeMS >= scheduleToCloseTimeout) {
-        return {
-          success: false,
-          runtimeMS: totalRuntimeMS,
-          reason: "scheduleToCloseTimeout",
-        };
-      }
-    }
-  }
-
-  if (state.retries.length === 0) {
-    return {
-      success: false,
-      runtimeMS: 0,
-      reason: "No retries",
-    };
-  }
-
-  return {
-    success: true,
-    runtimeMS: totalRuntimeMS,
-  };
 }
 
 function retryPolicyCode(state) {
