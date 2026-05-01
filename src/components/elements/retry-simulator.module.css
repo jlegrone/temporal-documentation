@@ -66,14 +66,28 @@
 }
 
 .result {
-  padding: 5px;
-  text-align: center;
+  padding: 0.75em 1em;
   border-radius: 4px;
 }
 
-.resultText {
-  margin-top: 1em;
-  margin-bottom: 1em;
+.resultRow {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75em;
+  padding: 0.4em 0;
+}
+
+.resultRow + .resultRow {
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.resultLabel {
+  font-weight: 600;
+  min-width: 9em;
+}
+
+.resultValue {
+  flex: 1;
 }
 
 .success {
@@ -202,13 +216,4 @@
   margin-top: 1.5em;
   padding-top: 1em;
   border-top: 1px solid #ddd;
-}
-
-.limitReason {
-  margin-top: 0.5em;
-  padding: 0.5em 0.75em;
-  border-left: 3px solid #d9534f;
-  background-color: var(--ifm-badge-background-color);
-  color: var(--docsearch-text-color);
-  font-size: 0.9em;
 }

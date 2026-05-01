@@ -68,15 +68,25 @@ const scheduleToCloseMarkerPlugin = {
   },
 };
 
-// Map result.reason to a user-facing caption. Successful runs return null —
-// the green final bar makes the outcome obvious without an extra caption.
-const LIMIT_REASON_LABELS = {
-  scheduleToCloseTimeout: "Chain ended: scheduleToCloseTimeout reached",
-  maximumAttempts: "Chain ended: maximumAttempts reached",
-  scheduleTime: "Activity Task expired before being picked up",
-  neverTerminates: "Activity never terminates — projected indefinitely",
-  "No retries": "No retry entries configured",
-};
+// Map a calculateResult outcome to the kind of label Temporal would attach to
+// the Workflow History event for the activity execution. Failures map to
+// "Failed (...)"; timeout-driven failures map to "Timed Out (timeoutType)".
+function resultStatusLabel(success, reason) {
+  if (success === null) return "Never terminates";
+  if (success === true) return "Success";
+  switch (reason) {
+    case "scheduleToCloseTimeout":
+      return "Timed Out (ScheduleToCloseTimeout)";
+    case "scheduleTime":
+      return "Timed Out (ScheduleToStartTimeout)";
+    case "maximumAttempts":
+      return "Failed (maximumAttempts)";
+    case "No retries":
+      return "Failed (no retries configured)";
+    default:
+      return "Failed";
+  }
+}
 
 const languageSamples = new Map([]);
 languageSamples.set(
@@ -607,13 +617,20 @@ export default function RetrySimulator() {
       <div className={styles.retryRow}>
         <div className={styles.retryCol}>
           <div className={styles.result + " " + (success === true ? styles.success : styles.fail)}>
-            <h3 className={styles.resultText}>
-              {success === null
-                ? "Never terminates — unlimited attempts"
-                : `${success ? "Success" : "Failed"} after ${formatDurationHuman(runtimeMS)} (${attempts} ${
-                    attempts === 1 ? "attempt" : "attempts"
-                  })${success ? "" : ": " + reason}`}
-            </h3>
+            <div className={styles.resultRow}>
+              <span className={styles.resultLabel}>Status</span>
+              <span className={styles.resultValue}>{resultStatusLabel(success, reason)}</span>
+            </div>
+            <div className={styles.resultRow}>
+              <span className={styles.resultLabel}>Time Elapsed</span>
+              <span className={styles.resultValue}>
+                {success === null ? "∞" : formatDurationHuman(runtimeMS)}
+              </span>
+            </div>
+            <div className={styles.resultRow}>
+              <span className={styles.resultLabel}>Attempts</span>
+              <span className={styles.resultValue}>{success === null ? "∞" : attempts}</span>
+            </div>
           </div>
         </div>
         <div className={styles.retryCol}>
@@ -623,9 +640,6 @@ export default function RetrySimulator() {
       <div className={styles.timelineSection}>
         <h3>Attempt Timeline</h3>
         <canvas ref={timelineCanvas}></canvas>
-        {LIMIT_REASON_LABELS[reason] && (
-          <div className={styles.limitReason}>{LIMIT_REASON_LABELS[reason]}</div>
-        )}
       </div>
     </div>
   );
