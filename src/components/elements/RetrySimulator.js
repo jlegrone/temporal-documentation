@@ -302,6 +302,13 @@ export default function RetrySimulator() {
     const scheduleToCloseMS = state.scheduleToCloseTimeout.toMilliseconds();
     chart.$scheduleToCloseTimeoutMS = scheduleToCloseMS;
 
+    // Anchor the X-axis to at least 5× the first attempt's duration so a
+    // single quick attempt doesn't render against a tiny zoomed-in axis. The
+    // existing data-driven max takes over once attempts run past this floor.
+    const firstAttemptElapsed = timeline[0]?.elapsedMS ?? 0;
+    chart.options.scales.x.suggestedMin = 0;
+    chart.options.scales.x.suggestedMax = firstAttemptElapsed * 5;
+
     chart.data.labels = labels;
     chart.data.datasets = [
       {
