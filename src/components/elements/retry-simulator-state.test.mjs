@@ -215,7 +215,7 @@ test("retries=fail:100*50 decodes to a single entry with count=50", () => {
   ]);
 });
 
-test("retries with count=1 omit the *N suffix from the URL", () => {
+test("retries with count=1 omit the attempts suffix from the URL", () => {
   const state = {
     ...DEFAULTS,
     retries: [
@@ -223,7 +223,125 @@ test("retries with count=1 omit the *N suffix from the URL", () => {
       { success: true, runtime: new Duration(1, "ms") },
     ],
   };
-  assert.equal(encodeStateToParams(state).get("retries"), "fail:100ms,succeed:1ms");
+  assert.equal(
+    encodeStateToParams(state).get("retries"),
+    "fail:after:100ms,succeed:after:1ms"
+  );
+});
+
+test("retries encode the new self-describing format with attempts", () => {
+  const state = {
+    ...DEFAULTS,
+    retries: [
+      { success: false, runtime: new Duration(100, "ms"), count: 50 },
+      { success: true, runtime: new Duration(1, "s") },
+    ],
+  };
+  assert.equal(
+    encodeStateToParams(state).get("retries"),
+    "fail:after:100ms:attempts:50,succeed:after:1s"
+  );
+});
+
+test("retries with period round-trip through the URL", () => {
+  const state = {
+    ...DEFAULTS,
+    scheduleToCloseTimeout: new Duration(1_000_000_000, "ms"),
+    retries: [
+      { success: false, runtime: new Duration(100, "ms"), period: new Duration(30, "m") },
+      { success: true, runtime: new Duration(50, "ms") },
+    ],
+  };
+  assert.deepEqual(roundTrip(state), state);
+});
+
+test("retries period segment encodes as :period:<duration>", () => {
+  const state = {
+    ...DEFAULTS,
+    retries: [
+      { success: false, runtime: new Duration(100, "ms"), period: new Duration(30, "m") },
+      { success: true, runtime: new Duration(50, "ms") },
+    ],
+  };
+  assert.equal(
+    encodeStateToParams(state).get("retries"),
+    "fail:after:100ms:period:30m,succeed:after:50ms"
+  );
+});
+
+test("legacy retry URL format still decodes (positional, *count)", () => {
+  const decoded = decodeStateFromParams("?retries=fail:100*5,succeed:50");
+  assert.deepEqual(decoded.retries, [
+    { success: false, runtime: new Duration(100, "ms"), count: 5 },
+    { success: true, runtime: new Duration(50, "ms") },
+  ]);
+});
+
+test("malformed retry URLs reject unknown keys", () => {
+  for (const malformed of [
+    "?retries=fail:after:100ms:bogus:1",
+    "?retries=fail:after:100ms:attempts",
+    "?retries=fail:after:100ms:period:0s",
+    "?retries=fail:after:100ms:attempts:50:period:30m",
+  ]) {
+    assert.deepEqual(decodeStateFromParams(malformed).retries, DEFAULTS.retries);
+  }
+});
+
+test("calculateResult: failure period bounds an outage window", () => {
+  // 30 minutes of failures, then a success. With initialInterval=1s, backoff=2,
+  // maximumInterval=100s, the chain runs many timed retries until the period
+  // ends, after which the next entry's success returns. The success attempts
+  // count = total attempts inside the window + 1 success.
+  const state = {
+    ...DEFAULTS,
+    retries: [
+      { success: false, runtime: new Duration(100, "ms"), period: new Duration(30, "m") },
+      { success: true, runtime: new Duration(50, "ms") },
+    ],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, true);
+  assert.ok(result.runtimeMS >= 30 * 60 * 1000); // at least 30 minutes elapsed
+  assert.ok(result.attempts > 1);
+});
+
+test("calculateResult: success period with runtime > startToCloseTimeout produces timed-out attempts then exits", () => {
+  // For 2 minutes the latency is 5s, but startToCloseTimeout=2s kills every
+  // attempt. After the period elapses the next entry's quick success returns.
+  const state = {
+    ...DEFAULTS,
+    startToCloseTimeout: new Duration(2, "s"),
+    retries: [
+      { success: true, runtime: new Duration(5, "s"), period: new Duration(2, "m") },
+      { success: true, runtime: new Duration(50, "ms") },
+    ],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, true);
+  // Should take at least 2 minutes (the latency window) before the success.
+  assert.ok(result.runtimeMS >= 2 * 60 * 1000);
+});
+
+test("calculateResult: count and period together stop on whichever fires first", () => {
+  // count=1000 is huge; period=10s should be the binding limit.
+  const state = {
+    ...DEFAULTS,
+    retries: [
+      {
+        success: false,
+        runtime: new Duration(10, "ms"),
+        count: 1000,
+        period: new Duration(10, "s"),
+      },
+      { success: true, runtime: new Duration(50, "ms") },
+    ],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, true);
+  // Period bounded the failure phase, so we shouldn't have run anywhere near
+  // 1000 attempts before the success.
+  assert.ok(result.attempts < 50, `expected < 50 attempts, got ${result.attempts}`);
 });
 
 test("retries can carry per-entry duration units", () => {

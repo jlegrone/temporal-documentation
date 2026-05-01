@@ -83,10 +83,14 @@ export default function RetrySimulator() {
       }
     }
     retries[index] = { ...retries[index], ...update };
-    // count=1 is the default; drop it from state so encoded state stays minimal
-    // and serialized comparisons (round-trip tests) line up.
-    if (retries[index].count === 1) {
+    // The UI toggles between count and period modes; passing null for one
+    // clears it from state so encode/decode stays minimal and the two fields
+    // never coexist accidentally.
+    if (update.count === null || retries[index].count === 1) {
       delete retries[index].count;
+    }
+    if (update.period === null) {
+      delete retries[index].period;
     }
     setState({ ...state, retries });
   });
@@ -420,6 +424,8 @@ export default function RetrySimulator() {
 function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
   const count = retry.count ?? 1;
   const runtime = retry.runtime;
+  const periodMode = retry.period instanceof Duration;
+  const period = retry.period ?? new Duration(1, "m");
   return (
     <div className={styles.retry} key={"retry-" + index}>
       <div className={styles.inputContainer}>
@@ -461,22 +467,67 @@ function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
         </span>
       </div>
       {!retry.success && (
-        <div className={styles.retryCountRow}>
-          <span className={styles.retryCountLabel}>×</span>
-          <input
-            type="number"
-            min={1}
-            step={1}
-            className={styles.retryCountInput}
-            value={count}
-            onChange={(ev) => updateRetry(index, { count: ev.target.value })}
-          />
-          <span className={styles.retryCountSuffix}>
-            {count === 1
-              ? "attempt"
-              : `attempts, avg ${runtime.value} ${runtime.unit} each`}
-          </span>
-        </div>
+        <>
+          <div className={styles.retryCountRow}>
+            <input
+              type="radio"
+              name={`retryRepeat-${index}`}
+              checked={!periodMode}
+              onChange={() => updateRetry(index, { period: null, count: count })}
+            />
+            <span className={styles.retryCountLabel}>×</span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              className={styles.retryCountInput}
+              value={count}
+              disabled={periodMode}
+              onChange={(ev) => updateRetry(index, { count: ev.target.value, period: null })}
+            />
+            <span className={styles.retryCountSuffix}>
+              {count === 1
+                ? "attempt"
+                : `attempts, avg ${runtime.value} ${runtime.unit} each`}
+            </span>
+          </div>
+          <div className={styles.retryCountRow}>
+            <input
+              type="radio"
+              name={`retryRepeat-${index}`}
+              checked={periodMode}
+              onChange={() => updateRetry(index, { period, count: null })}
+            />
+            <span className={styles.retryCountLabel}>for</span>
+            <input
+              type="number"
+              min={0}
+              step="any"
+              className={styles.retryCountInput}
+              value={period.value}
+              disabled={!periodMode}
+              onChange={(ev) => {
+                const next = +ev.target.value;
+                if (isNaN(next)) return;
+                updateRetry(index, { period: period.withValue(next), count: null });
+              }}
+            />
+            <select
+              className={styles.unitSelect}
+              value={period.unit}
+              disabled={!periodMode}
+              onChange={(ev) =>
+                updateRetry(index, { period: period.withUnit(ev.target.value), count: null })
+              }
+            >
+              {DURATION_UNITS.map((u) => (
+                <option key={u} value={u}>
+                  {UNIT_LABELS[u]}
+                </option>
+              ))}
+            </select>
+          </div>
+        </>
       )}
     </div>
   );

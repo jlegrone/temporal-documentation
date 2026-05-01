@@ -138,38 +138,74 @@ const SUPPORTED_LANGUAGES = ["typescript", "go"];
 function encodeRetries(retries) {
   return retries
     .map((r) => {
-      const base = `${r.success ? "succeed" : "fail"}:${r.runtime.toString()}`;
-      const count = r.count ?? 1;
-      return count > 1 ? `${base}*${count}` : base;
+      let segment = `${r.success ? "succeed" : "fail"}:after:${r.runtime.toString()}`;
+      if (r.period instanceof Duration) {
+        segment += `:period:${r.period.toString()}`;
+      } else if (r.count != null && r.count > 1) {
+        segment += `:attempts:${r.count}`;
+      }
+      return segment;
     })
     .join(",");
 }
 
-// Matches "<outcome>:<value><unit?>(*count)?". Bare numbers (no unit) are
-// treated as milliseconds for backward compatibility with older URLs.
-const RETRY_PART_REGEX = /^(succeed|fail):(\d+(?:\.\d+)?)(ms|s|m|h)?(?:\*(\d+))?$/;
+// Legacy positional format kept for backward compatibility with shared URLs:
+// <outcome>:<value><unit?>(*count)?. Bare numbers are treated as ms.
+const LEGACY_RETRY_PART_REGEX = /^(succeed|fail):(\d+(?:\.\d+)?)(ms|s|m|h)?(?:\*(\d+))?$/;
+
+function decodeRetryPart(part) {
+  // New format: <outcome>:after:<duration>(:attempts:<n>|:period:<duration>)?
+  const tokens = part.split(":");
+  if (tokens.length >= 3 && tokens[1] === "after") {
+    const outcome = tokens[0];
+    if (outcome !== "succeed" && outcome !== "fail") return null;
+    const runtime = Duration.parse(tokens[2]);
+    if (!runtime) return null;
+
+    const retry = { success: outcome === "succeed", runtime };
+    let i = 3;
+    while (i < tokens.length) {
+      const key = tokens[i];
+      const value = tokens[i + 1];
+      if (value == null) return null;
+      if (key === "attempts") {
+        if ("count" in retry || "period" in retry) return null;
+        const n = Number(value);
+        if (!Number.isInteger(n) || n < 1) return null;
+        if (n > 1) retry.count = n;
+      } else if (key === "period") {
+        if ("count" in retry || "period" in retry) return null;
+        const d = Duration.parse(value);
+        if (!d || d.toMilliseconds() <= 0) return null;
+        retry.period = d;
+      } else {
+        return null;
+      }
+      i += 2;
+    }
+    return retry;
+  }
+
+  // Legacy positional format.
+  const legacy = LEGACY_RETRY_PART_REGEX.exec(part);
+  if (!legacy) return null;
+  const [, outcome, valueRaw, unitRaw, countRaw] = legacy;
+  const value = Number(valueRaw);
+  if (!Number.isFinite(value)) return null;
+  const unit = unitRaw ?? "ms";
+  const count = countRaw == null ? 1 : Number(countRaw);
+  if (!Number.isInteger(count) || count < 1) return null;
+  const retry = { success: outcome === "succeed", runtime: new Duration(value, unit) };
+  if (count > 1) retry.count = count;
+  return retry;
+}
 
 function decodeRetries(raw) {
   const parts = raw.split(",");
   const retries = [];
   for (const part of parts) {
-    const match = RETRY_PART_REGEX.exec(part);
-    if (!match) return null;
-    const [, outcome, valueRaw, unitRaw, countRaw] = match;
-    const value = Number(valueRaw);
-    if (!Number.isFinite(value)) {
-      return null;
-    }
-    const unit = unitRaw ?? "ms";
-    const count = countRaw == null ? 1 : Number(countRaw);
-    if (!Number.isInteger(count) || count < 1) {
-      return null;
-    }
-    const retry = {
-      success: outcome === "succeed",
-      runtime: new Duration(value, unit),
-    };
-    if (count > 1) retry.count = count;
+    const retry = decodeRetryPart(part);
+    if (!retry) return null;
     retries.push(retry);
   }
   return retries.length > 0 ? retries : null;
@@ -179,13 +215,19 @@ function retriesEqualDefault(retries) {
   const def = DEFAULT_STATE.retries;
   if (retries.length !== def.length) return false;
   for (let i = 0; i < retries.length; ++i) {
+    const a = retries[i];
+    const b = def[i];
     if (
-      retries[i].success !== def[i].success ||
-      !retries[i].runtime.equals(def[i].runtime) ||
-      (retries[i].count ?? 1) !== (def[i].count ?? 1)
+      a.success !== b.success ||
+      !a.runtime.equals(b.runtime) ||
+      (a.count ?? 1) !== (b.count ?? 1)
     ) {
       return false;
     }
+    const aPeriod = a.period instanceof Duration;
+    const bPeriod = b.period instanceof Duration;
+    if (aPeriod !== bPeriod) return false;
+    if (aPeriod && bPeriod && !a.period.equals(b.period)) return false;
   }
   return true;
 }
@@ -250,16 +292,7 @@ export function calculateResult(state) {
     };
   }
 
-  // Expand each retry entry by its count so a single configured failure
-  // can stand in for many sequential attempts with the same runtime.
-  const flatRetries = state.retries.flatMap((r) =>
-    Array.from({ length: r.count ?? 1 }, () => ({
-      success: r.success,
-      runtimeMS: r.runtime.toMilliseconds(),
-    }))
-  );
-
-  if (flatRetries.length === 0) {
+  if (state.retries.length === 0) {
     return { success: false, runtimeMS: 0, attempts: 0, reason: "No retries" };
   }
 
@@ -268,11 +301,12 @@ export function calculateResult(state) {
   // timeout, not a successful run), the user is implicitly saying "and it
   // would keep going this way." Project additional attempts with the last
   // configured runtime until something terminates the chain.
-  const lastConfigured = flatRetries[flatRetries.length - 1];
+  const lastConfigured = state.retries[state.retries.length - 1];
+  const lastConfiguredRuntimeMS = lastConfigured.runtime.toMilliseconds();
   const lastWouldTimeOut =
-    startToCloseTimeout > 0 && lastConfigured.runtimeMS >= startToCloseTimeout;
+    startToCloseTimeout > 0 && lastConfiguredRuntimeMS >= startToCloseTimeout;
   const lastWouldFail = !lastConfigured.success || lastWouldTimeOut;
-  const projectedRuntimeMS = lastWouldFail ? lastConfigured.runtimeMS : null;
+  const projectedRuntimeMS = lastWouldFail ? lastConfiguredRuntimeMS : null;
 
   // Detect the open-ended infinite case up front so we don't spin in the
   // projection loop below. With no maximumAttempts and no scheduleToCloseTimeout,
@@ -292,15 +326,24 @@ export function calculateResult(state) {
   let retryIntervalMS = initialInterval;
   let totalRuntimeMS = 0;
 
+  // Walk configured retry entries. Each entry is bounded by either an attempt
+  // count (default 1 when neither count nor period is set) or a wall-clock
+  // period; the loop advances to the next entry as soon as either limit is
+  // reached, then projects beyond the last entry as needed.
+  let entryIndex = 0;
+  let entryAttemptsUsed = 0;
+  let entryElapsedMS = 0;
+
   for (let i = 0; ; ++i) {
     let currentRetryRuntime;
     let isSuccess;
-    if (i < flatRetries.length) {
-      currentRetryRuntime = flatRetries[i].runtimeMS;
-      isSuccess = flatRetries[i].success;
+    if (entryIndex < state.retries.length) {
+      const entry = state.retries[entryIndex];
+      currentRetryRuntime = entry.runtime.toMilliseconds();
+      isSuccess = entry.success;
     } else {
       // Beyond the configured chain — project further failures.
-      if (projectedRuntimeMS == null || i >= flatRetries.length + PROJECTION_GUARD) {
+      if (projectedRuntimeMS == null || i >= state.retries.length + PROJECTION_GUARD) {
         return { success: null, runtimeMS: totalRuntimeMS, attempts: Infinity, reason: "neverTerminates" };
       }
       currentRetryRuntime = projectedRuntimeMS;
@@ -318,6 +361,8 @@ export function calculateResult(state) {
       isSuccess = false;
     }
     totalRuntimeMS += attemptElapsed;
+    entryElapsedMS += attemptElapsed;
+    entryAttemptsUsed += 1;
 
     if (isSuccess) {
       return { success: true, runtimeMS: totalRuntimeMS, attempts: i + 1 };
@@ -334,6 +379,7 @@ export function calculateResult(state) {
 
     retryIntervalMS = Math.min(retryIntervalMS * backoffCoefficient, maximumInterval);
     totalRuntimeMS += retryIntervalMS;
+    entryElapsedMS += retryIntervalMS;
 
     if (scheduleToCloseTimeout > 0 && totalRuntimeMS >= scheduleToCloseTimeout) {
       return {
@@ -342,6 +388,20 @@ export function calculateResult(state) {
         attempts: i + 1,
         reason: "scheduleToCloseTimeout",
       };
+    }
+
+    // Advance to the next configured entry once the active one is exhausted.
+    if (entryIndex < state.retries.length) {
+      const entry = state.retries[entryIndex];
+      const periodMS = entry.period?.toMilliseconds();
+      // Default to 1 attempt only when neither count nor period is configured.
+      const countLimit = entry.count ?? (periodMS != null ? Infinity : 1);
+      const periodLimitMS = periodMS ?? Infinity;
+      if (entryAttemptsUsed >= countLimit || entryElapsedMS >= periodLimitMS) {
+        entryIndex += 1;
+        entryAttemptsUsed = 0;
+        entryElapsedMS = 0;
+      }
     }
   }
 }
