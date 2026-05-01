@@ -131,6 +131,26 @@
   margin-bottom: 15px;
 }
 
+.parameterMeta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1em;
+  margin: 0.4em 0 0.6em;
+  font-size: 0.85em;
+}
+
+.parameterDescription {
+  color: var(--ifm-color-emphasis-700);
+  flex: 1;
+}
+
+.parameterDefault {
+  color: var(--ifm-color-emphasis-600);
+  white-space: nowrap;
+  font-style: italic;
+}
+
 .slider {
   width: 100%;
   background: #d3d3d3;

@@ -410,17 +410,78 @@ function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
   );
 }
 
+const PARAM_METADATA = {
+  startToCloseTimeout: {
+    label: "Start-To-Close Timeout",
+    description:
+      "Maximum time allowed for a single Activity Task Execution. Either this or Schedule-To-Close Timeout must be set.",
+    href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#start-to-close-timeout",
+    defaultDisplay: "∞",
+  },
+  scheduleToStartTimeout: {
+    label: "Schedule-To-Start Timeout",
+    description:
+      "Maximum time from when an Activity Task is scheduled to when a Worker picks it up.",
+    href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#schedule-to-start-timeout",
+    defaultDisplay: "∞",
+  },
+  scheduleToCloseTimeout: {
+    label: "Schedule-To-Close Timeout",
+    description:
+      "Maximum time for the overall Activity Execution, from first scheduling to last completion.",
+    href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#schedule-to-close-timeout",
+    defaultDisplay: "∞",
+  },
+  backoffCoefficient: {
+    label: "Backoff Coefficient",
+    description: "Multiplier applied to each successive retry interval.",
+    href: "https://docs.temporal.io/encyclopedia/retry-policies#backoff-coefficient",
+    defaultDisplay: "2",
+  },
+  initialInterval: {
+    label: "Initial Interval",
+    description: "Amount of time that must elapse before the first retry occurs.",
+    href: "https://docs.temporal.io/encyclopedia/retry-policies#initial-interval",
+    defaultDisplay: "1000 ms",
+  },
+  maximumAttempts: {
+    label: "Maximum Attempts",
+    description:
+      "Maximum number of execution attempts that can be made in the presence of failures (0 means unlimited).",
+    href: "https://docs.temporal.io/encyclopedia/retry-policies#maximum-attempts",
+    defaultDisplay: "∞",
+  },
+  maximumInterval: {
+    label: "Maximum Interval",
+    description: "Upper bound on the interval between retries.",
+    href: "https://docs.temporal.io/encyclopedia/retry-policies#maximum-interval",
+    defaultDisplay: "100 × Initial Interval",
+  },
+};
+
 function RetryPolicyParamInputs({ param, value, updateRetryPolicyParam, min, max, step }) {
+  const meta = PARAM_METADATA[param];
   return (
     <div className={styles.parameter}>
       <div className={styles.inputContainer}>
-        <label className={styles.numberInputLabel}>{param}</label>
+        <a
+          className={styles.numberInputLabel}
+          href={meta.href}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {meta.label}
+        </a>
         <input
           value={value}
           onChange={(ev) => updateRetryPolicyParam(param, ev)}
           className={styles.numberInput}
           type="number"
         />
+      </div>
+      <div className={styles.parameterMeta}>
+        <span className={styles.parameterDescription}>{meta.description}</span>
+        <span className={styles.parameterDefault}>Default: {meta.defaultDisplay}</span>
       </div>
       <input
         value={value}
