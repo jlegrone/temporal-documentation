@@ -430,9 +430,11 @@ export function calculateResult(state, options = {}) {
     entryElapsedMS += retryIntervalMS;
 
     if (scheduleToCloseTimeout > 0 && totalRuntimeMS >= scheduleToCloseTimeout) {
+      // Temporal fails the execution at exactly scheduleToCloseTimeout — the
+      // pending retry interval doesn't get to "run past" the deadline.
       return withOutcomes({
         success: false,
-        runtimeMS: totalRuntimeMS,
+        runtimeMS: scheduleToCloseTimeout,
         attempts: i + 1,
         reason: "scheduleToCloseTimeout",
       });

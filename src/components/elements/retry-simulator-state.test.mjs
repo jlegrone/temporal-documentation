@@ -648,6 +648,23 @@ test("calculateResult: totalRuntimeMS exactly equal to scheduleToCloseTimeout st
   assert.equal(result.attempts, 1);
 });
 
+test("calculateResult: scheduleToCloseTimeout caps reported runtimeMS at the timeout", () => {
+  // When a retry interval would push the simulation past scheduleToCloseTimeout,
+  // Temporal fails the execution at the deadline — not at deadline + interval.
+  // Verify the reported runtimeMS reflects the actual failure point.
+  const state = {
+    ...DEFAULTS,
+    initialInterval: new Duration(1, "s"),
+    backoffCoefficient: 10,
+    scheduleToCloseTimeout: new Duration(5, "s"),
+    retries: [{ success: false, runtime: new Duration(1, "s") }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, false);
+  assert.equal(result.reason, "scheduleToCloseTimeout");
+  assert.equal(result.runtimeMS, 5000);
+});
+
 test("calculateResult: maximumAttempts limits retries", () => {
   const state = {
     ...DEFAULTS,
