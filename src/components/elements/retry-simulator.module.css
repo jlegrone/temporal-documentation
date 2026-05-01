@@ -197,3 +197,18 @@
 .addButton {
   padding: 0.25em 0.5em;
 }
+
+.timelineSection {
+  margin-top: 1.5em;
+  padding-top: 1em;
+  border-top: 1px solid #ddd;
+}
+
+.limitReason {
+  margin-top: 0.5em;
+  padding: 0.5em 0.75em;
+  border-left: 3px solid #d9534f;
+  background-color: var(--ifm-badge-background-color);
+  color: var(--docsearch-text-color);
+  font-size: 0.9em;
+}

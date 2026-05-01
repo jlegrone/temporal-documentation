@@ -22,6 +22,54 @@ const OUTCOME_COLORS = {
   notUsed: "#bbbbbb", // gray
 };
 
+// Hard upper bound on bars rendered in either chart. Beyond this, individual
+// attempts get unreadably small; the simulation still tracks the actual count.
+const SLOT_CAP = 100;
+
+// Chart.js plugin: draws a vertical red line at scheduleToCloseTimeout on the
+// timeline chart. The chart instance carries the current timeout in
+// `chart.$scheduleToCloseTimeoutMS` (set by updateTimeline) — this lives on the
+// chart rather than module state so it survives across renders without forcing
+// the plugin into a React closure.
+const scheduleToCloseMarkerPlugin = {
+  id: "scheduleToCloseMarker",
+  afterDraw(chart) {
+    const timeoutMS = chart.$scheduleToCloseTimeoutMS;
+    if (!(timeoutMS > 0)) return;
+    const xScale = chart.scales.x;
+    if (!xScale) return;
+    if (timeoutMS < xScale.min || timeoutMS > xScale.max) return;
+    const x = xScale.getPixelForValue(timeoutMS);
+    const { top, bottom } = chart.chartArea;
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.strokeStyle = "#d9534f";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, bottom);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#d9534f";
+    ctx.font = "11px sans-serif";
+    ctx.textAlign = x > (xScale.left + xScale.right) / 2 ? "right" : "left";
+    const labelX = x + (ctx.textAlign === "right" ? -4 : 4);
+    ctx.fillText("scheduleToCloseTimeout", labelX, top + 12);
+    ctx.restore();
+  },
+};
+
+// Map result.reason to a user-facing caption. Successful runs return null —
+// the green final bar makes the outcome obvious without an extra caption.
+const LIMIT_REASON_LABELS = {
+  scheduleToCloseTimeout: "Chain ended: scheduleToCloseTimeout reached",
+  maximumAttempts: "Chain ended: maximumAttempts reached",
+  scheduleTime: "Activity Task expired before being picked up",
+  neverTerminates: "Activity never terminates — projected indefinitely",
+  "No retries": "No retry entries configured",
+};
+
 const languageSamples = new Map([]);
 languageSamples.set(
   "typescript",
@@ -65,6 +113,7 @@ func TestActivity(ctx context.Context, url string) error {
 export default function RetrySimulator() {
   const [state, setState] = useState(() => decodeStateFromParams(""));
   const chartCanvas = useRef(null);
+  const timelineCanvas = useRef(null);
   const hasHydratedFromUrl = useRef(false);
   const { colorMode } = useColorMode();
   const isDarkTheme = colorMode === 'dark';
@@ -199,7 +248,6 @@ export default function RetrySimulator() {
     // actually happened on that attempt (succeeded / failed / timed out) or
     // grayed out for slots the activity never reached. Cap tracked outcomes
     // at SLOT_CAP since the chart can't usefully render more bars than that.
-    const SLOT_CAP = 100;
     const result = calculateResult(state, { trackOutcomes: SLOT_CAP });
     const baseSlots = maximumAttempts === 0 ? 10 : Math.min(maximumAttempts, 30);
     // When the activity terminates, grow the chart to cover every attempt that
@@ -210,14 +258,14 @@ export default function RetrySimulator() {
       result.success !== null
         ? Math.min(SLOT_CAP, Math.max(baseSlots, result.attempts))
         : baseSlots;
-    const attemptOutcomes = result.attemptOutcomes || [];
+    const attemptTimeline = result.attemptTimeline || [];
     let interval = initialInterval;
     const colors = [];
     for (let i = 0; i < slots; ++i) {
       interval = Math.min(interval, maximumInterval);
       labels.push(i + 1);
       values.push(interval);
-      colors.push(OUTCOME_COLORS[attemptOutcomes[i]] || OUTCOME_COLORS.notUsed);
+      colors.push(OUTCOME_COLORS[attemptTimeline[i]?.outcome] || OUTCOME_COLORS.notUsed);
       interval = interval * backoffCoefficient;
     }
 
@@ -233,6 +281,39 @@ export default function RetrySimulator() {
         backgroundColor: colors,
         borderColor: colors,
         data: values,
+      },
+    ];
+    chart.update();
+  });
+
+  const updateTimeline = useCallback(function updateTimeline() {
+    if (timelineCanvas.current == null || timelineCanvas.current.chart == null) {
+      return;
+    }
+    const chart = timelineCanvas.current.chart;
+    const result = calculateResult(state, { trackOutcomes: SLOT_CAP });
+    const timeline = result.attemptTimeline || [];
+    const labels = timeline.map((_, i) => i + 1);
+    // Floating bars: each data point is [start, end] in ms. Chart.js renders
+    // them as horizontal spans on the wall-clock X-axis when indexAxis is "y".
+    const data = timeline.map((a) => [a.startMS, a.startMS + a.elapsedMS]);
+    const colors = timeline.map((a) => OUTCOME_COLORS[a.outcome] || OUTCOME_COLORS.notUsed);
+
+    const scheduleToCloseMS = state.scheduleToCloseTimeout.toMilliseconds();
+    chart.$scheduleToCloseTimeoutMS = scheduleToCloseMS;
+
+    chart.data.labels = labels;
+    chart.data.datasets = [
+      {
+        label: "Attempt time on the wall clock",
+        backgroundColor: colors,
+        borderColor: colors,
+        data,
+        borderWidth: 1,
+        // Make zero-elapsed-time attempts visible by giving them a minimum
+        // pixel width via barPercentage; otherwise instantaneous attempts
+        // wouldn't render at all.
+        minBarLength: 4,
       },
     ];
     chart.update();
@@ -273,15 +354,58 @@ export default function RetrySimulator() {
   );
 
   useEffect(
-    function updateChartDarkTheme() {
-      if (chartCanvas.current == null || chartCanvas.current.chart == null) {
-        return;
-      }
-      const chart = chartCanvas.current.chart;
+    function initializeTimelineChart() {
+      const chart = new Chart(timelineCanvas.current, {
+        type: "bar",
+        plugins: [scheduleToCloseMarkerPlugin],
+        options: {
+          responsive: true,
+          indexAxis: "y",
+          scales: {
+            x: {
+              type: "linear",
+              title: { display: true, text: "Wall-clock time" },
+              grid: { color: "#ddd" },
+              ticks: {
+                callback: (value) => formatDurationHuman(value),
+              },
+            },
+            y: {
+              title: { display: true, text: "Attempt" },
+              grid: { color: "#ddd" },
+              ticks: { autoSkip: true, maxTicksLimit: 12 },
+            },
+          },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: (items) => `Attempt ${items[0].label}`,
+                label: (item) => {
+                  const [start, end] = item.raw;
+                  return `${formatDurationHuman(start)} → ${formatDurationHuman(end)} (${formatDurationHuman(end - start)})`;
+                },
+              },
+            },
+          },
+        },
+      });
+      timelineCanvas.current.chart = chart;
 
-      chart.options.scales.y.grid.color = isDarkTheme ? "#222" : "#ddd";
-      chart.options.scales.x.grid.color = isDarkTheme ? "#222" : "#ddd";
-      chart.update();
+      updateTimeline();
+    },
+    [timelineCanvas]
+  );
+
+  useEffect(
+    function updateChartDarkTheme() {
+      const charts = [chartCanvas.current?.chart, timelineCanvas.current?.chart].filter(Boolean);
+      const gridColor = isDarkTheme ? "#222" : "#ddd";
+      for (const chart of charts) {
+        if (chart.options.scales?.x?.grid) chart.options.scales.x.grid.color = gridColor;
+        if (chart.options.scales?.y?.grid) chart.options.scales.y.grid.color = gridColor;
+        chart.update();
+      }
     },
     [isDarkTheme]
   );
@@ -304,7 +428,10 @@ export default function RetrySimulator() {
     window.history.replaceState(null, "", newUrl);
   }, [state]);
 
-  useEffect(() => updateChart(), [state]);
+  useEffect(() => {
+    updateChart();
+    updateTimeline();
+  }, [state]);
 
   return (
     <div className={styles.retrySimulator}>
@@ -473,6 +600,13 @@ export default function RetrySimulator() {
         <div className={styles.retryCol}>
           <canvas ref={chartCanvas}></canvas>
         </div>
+      </div>
+      <div className={styles.timelineSection}>
+        <h3>Attempt Timeline</h3>
+        <canvas ref={timelineCanvas}></canvas>
+        {LIMIT_REASON_LABELS[reason] && (
+          <div className={styles.limitReason}>{LIMIT_REASON_LABELS[reason]}</div>
+        )}
       </div>
     </div>
   );

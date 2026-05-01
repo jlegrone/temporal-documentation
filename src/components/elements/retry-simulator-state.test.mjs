@@ -716,3 +716,66 @@ test("Duration.withUnit keeps the numeric value and changes the unit", () => {
   assert.equal(d.withUnit("s").value, 1500);
   assert.equal(d.withUnit("s").toMilliseconds(), 1_500_000);
 });
+
+test("calculateResult: trackOutcomes returns attemptTimeline with monotonic startMS", () => {
+  const state = {
+    ...DEFAULTS,
+    initialInterval: new Duration(1, "s"),
+    backoffCoefficient: 2,
+    scheduleToCloseTimeout: new Duration(1_000_000, "ms"),
+    retries: [
+      { success: false, runtime: new Duration(100, "ms") },
+      { success: false, runtime: new Duration(100, "ms") },
+      { success: true, runtime: new Duration(100, "ms") },
+    ],
+  };
+  const result = calculateResult(state, { trackOutcomes: 10 });
+  const tl = result.attemptTimeline;
+  assert.equal(tl.length, 3);
+  // Monotonic non-decreasing startMS, each follows the previous attempt + retry interval.
+  assert.equal(tl[0].startMS, 0);
+  assert.ok(tl[1].startMS > tl[0].startMS + tl[0].elapsedMS);
+  assert.ok(tl[2].startMS > tl[1].startMS + tl[1].elapsedMS);
+  assert.deepEqual(
+    tl.map((a) => a.outcome),
+    ["failed", "failed", "succeeded"]
+  );
+  // Final entry's end matches the reported runtimeMS for terminal success.
+  const last = tl[tl.length - 1];
+  assert.equal(last.startMS + last.elapsedMS, result.runtimeMS);
+});
+
+test("calculateResult: attemptTimeline elapsedMS clamps at startToCloseTimeout", () => {
+  // Each attempt's runtime is 5s but startToCloseTimeout caps at 2s; every
+  // attempt should record elapsedMS=2000 with outcome "timedOut".
+  const state = {
+    ...DEFAULTS,
+    startToCloseTimeout: new Duration(2, "s"),
+    initialInterval: new Duration(1, "s"),
+    backoffCoefficient: 2,
+    scheduleToCloseTimeout: new Duration(1_000_000, "ms"),
+    maximumAttempts: 3,
+    retries: [{ success: true, runtime: new Duration(5, "s") }],
+  };
+  const result = calculateResult(state, { trackOutcomes: 10 });
+  const tl = result.attemptTimeline;
+  assert.equal(tl.length, 3);
+  for (const a of tl) {
+    assert.equal(a.elapsedMS, 2000);
+    assert.equal(a.outcome, "timedOut");
+  }
+});
+
+test("calculateResult: trackOutcomes caps attemptTimeline length", () => {
+  const state = {
+    ...DEFAULTS,
+    initialInterval: new Duration(1, "ms"),
+    backoffCoefficient: 1,
+    scheduleToCloseTimeout: new Duration(1_000_000, "ms"),
+    maximumAttempts: 50,
+    retries: [{ success: false, runtime: new Duration(1, "ms") }],
+  };
+  const result = calculateResult(state, { trackOutcomes: 5 });
+  assert.equal(result.attemptTimeline.length, 5);
+  assert.equal(result.attempts, 50);
+});

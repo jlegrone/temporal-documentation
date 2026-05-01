@@ -277,9 +277,11 @@ export function encodeStateToParams(state) {
 /**
  * @param state The simulator state.
  * @param options.trackOutcomes If a positive integer, the result includes an
- *   `attemptOutcomes` array of per-attempt classifications ("succeeded",
- *   "failed", or "timedOut"), capped at this many entries. The chart uses
- *   this to color each bar without having to re-run the simulation.
+ *   `attemptTimeline` array of per-attempt records
+ *   `{ startMS, elapsedMS, outcome }` (outcome is "succeeded", "failed", or
+ *   "timedOut"), capped at this many entries. The charts use this to color
+ *   bars and place them on a wall-clock axis without re-running the
+ *   simulation.
  */
 export function calculateResult(state, options = {}) {
   const startToCloseTimeout = state.startToCloseTimeout.toMilliseconds();
@@ -293,12 +295,12 @@ export function calculateResult(state, options = {}) {
     typeof options.trackOutcomes === "number" && options.trackOutcomes > 0
       ? options.trackOutcomes
       : 0;
-  const outcomes = trackLimit > 0 ? [] : null;
-  const withOutcomes = (result) =>
-    outcomes ? { ...result, attemptOutcomes: outcomes } : result;
+  const timeline = trackLimit > 0 ? [] : null;
+  const withTimeline = (result) =>
+    timeline ? { ...result, attemptTimeline: timeline } : result;
 
   if (scheduleToStartTimeout > 0 && scheduleTime >= scheduleToStartTimeout) {
-    return withOutcomes({
+    return withTimeline({
       success: false,
       runtimeMS: scheduleToStartTimeout,
       attempts: 0,
@@ -307,7 +309,7 @@ export function calculateResult(state, options = {}) {
   }
 
   if (state.retries.length === 0) {
-    return withOutcomes({ success: false, runtimeMS: 0, attempts: 0, reason: "No retries" });
+    return withTimeline({ success: false, runtimeMS: 0, attempts: 0, reason: "No retries" });
   }
 
   // Pre-compute per-entry numeric snapshots so the hot loop does only arithmetic.
@@ -351,7 +353,7 @@ export function calculateResult(state, options = {}) {
       maximumAttempts === 0 &&
       (scheduleToCloseTimeout === 0 || noProgress)
     ) {
-      return withOutcomes({ success: null, runtimeMS: 0, attempts: Infinity, reason: "neverTerminates" });
+      return withTimeline({ success: null, runtimeMS: 0, attempts: Infinity, reason: "neverTerminates" });
     }
   }
 
@@ -381,7 +383,7 @@ export function calculateResult(state, options = {}) {
       isSuccess = entry.success;
     } else {
       if (projectedRuntimeMS == null) {
-        return withOutcomes({
+        return withTimeline({
           success: null,
           runtimeMS: totalRuntimeMS,
           attempts: Infinity,
@@ -404,20 +406,25 @@ export function calculateResult(state, options = {}) {
       timedOut = true;
       isSuccess = false;
     }
+    const attemptStartMS = totalRuntimeMS;
     totalRuntimeMS += attemptElapsed;
     entryElapsedMS += attemptElapsed;
     entryAttemptsUsed += 1;
 
-    if (outcomes && outcomes.length < trackLimit) {
-      outcomes.push(timedOut ? "timedOut" : isSuccess ? "succeeded" : "failed");
+    if (timeline && timeline.length < trackLimit) {
+      timeline.push({
+        startMS: attemptStartMS,
+        elapsedMS: attemptElapsed,
+        outcome: timedOut ? "timedOut" : isSuccess ? "succeeded" : "failed",
+      });
     }
 
     if (isSuccess) {
-      return withOutcomes({ success: true, runtimeMS: totalRuntimeMS, attempts: i + 1 });
+      return withTimeline({ success: true, runtimeMS: totalRuntimeMS, attempts: i + 1 });
     }
 
     if (maximumAttempts > 0 && i + 1 >= maximumAttempts) {
-      return withOutcomes({
+      return withTimeline({
         success: false,
         runtimeMS: totalRuntimeMS,
         attempts: i + 1,
@@ -432,7 +439,7 @@ export function calculateResult(state, options = {}) {
     if (scheduleToCloseTimeout > 0 && totalRuntimeMS >= scheduleToCloseTimeout) {
       // Temporal fails the execution at exactly scheduleToCloseTimeout — the
       // pending retry interval doesn't get to "run past" the deadline.
-      return withOutcomes({
+      return withTimeline({
         success: false,
         runtimeMS: scheduleToCloseTimeout,
         attempts: i + 1,
@@ -451,7 +458,7 @@ export function calculateResult(state, options = {}) {
     }
   }
   // Hit the iteration guard — the simulation isn't converging.
-  return withOutcomes({
+  return withTimeline({
     success: null,
     runtimeMS: totalRuntimeMS,
     attempts: Infinity,
