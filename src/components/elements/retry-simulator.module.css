@@ -78,11 +78,14 @@
 
 .success {
   background-color: #d4eddc;
+  /* Hardcode a dark text color so the light green stays readable in dark mode. */
   color: black;
 }
 
 .fail {
   background-color: #f8d7da;
+  /* Hardcode a dark text color so the light pink stays readable in dark mode. */
+  color: black;
 }
 
 .inputContainer {
