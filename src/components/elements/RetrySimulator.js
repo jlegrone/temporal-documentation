@@ -967,8 +967,8 @@ function retryPolicyCode(state) {
     retryPolicy: {
       backoffCoefficient: state.backoffCoefficient,
       initialInterval: state.initialInterval,
-      maximumAttempts: state.maximumAttempts,
       maximumInterval: state.maximumInterval,
+      maximumAttempts: state.maximumAttempts,
     },
   };
   if (value.retryPolicy.maximumAttempts === 0) {
