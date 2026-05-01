@@ -107,6 +107,15 @@
   max-width: 29%;
 }
 
+.unitSelect {
+  float: right;
+  margin-left: 0.25em;
+  padding: 0.1em 0.25em;
+  border: 1px solid #ddd;
+  background-color: var(--ifm-background-color);
+  color: var(--docsearch-text-color);
+}
+
 .retryCountRow {
   display: flex;
   align-items: center;

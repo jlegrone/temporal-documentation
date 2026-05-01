@@ -4,6 +4,10 @@ import React, { useState, useCallback, useEffect, useRef } from "react";
 import styles from "./retry-simulator.module.css";
 import { useColorMode } from "@docusaurus/theme-common";
 import {
+  Duration,
+  DURATION_UNITS,
+  UNIT_LABELS,
+  UNIT_TO_GO,
   calculateResult,
   encodeStateToParams,
   decodeStateFromParams,
@@ -56,7 +60,7 @@ export default function RetrySimulator() {
   const { colorMode } = useColorMode();
   const isDarkTheme = colorMode === 'dark';
 
-  const addRetry = useCallback(function addRetry(success, runtimeMS) {
+  const addRetry = useCallback(function addRetry(success) {
     const retries = [...state.retries];
     if (retries.length > 0) {
       retries[retries.length - 1] = {
@@ -64,20 +68,13 @@ export default function RetrySimulator() {
         success: false,
       };
     }
-    const retry = { success, runtimeMS };
-    retries.push(retry);
+    retries.push({ success, runtime: new Duration(1, "s") });
 
     setState({ ...state, retries });
   });
 
   const updateRetry = useCallback(function updateRetry(index, update) {
     const retries = [...state.retries];
-    if (update.runtimeMS != null) {
-      update.runtimeMS = +update.runtimeMS;
-      if (isNaN(update.runtimeMS)) {
-        delete update.runtimeMS;
-      }
-    }
     if (update.count != null) {
       update.count = Math.max(1, Math.floor(+update.count));
       if (isNaN(update.count)) {
@@ -111,7 +108,7 @@ export default function RetrySimulator() {
     for (let i = 0; i < maxRetries; ++i) {
       const success = Math.random() < successRate || i === maxRetries - 1;
       const runtimeMS = requestRuntimeMS + Math.round((Math.random() - 0.5) * (requestRuntimeMS / 2)); // +/- 50%
-      retries.push({ success, runtimeMS });
+      retries.push({ success, runtime: new Duration(runtimeMS, "ms") });
       if (success) {
         break;
       }
@@ -125,8 +122,18 @@ export default function RetrySimulator() {
     if (isNaN(value)) {
       return;
     }
-    setState({ ...state, [prop]: +value });
+    const next = +value;
+    const current = state[prop];
+    // Duration fields keep their selected unit when the numeric value changes.
+    const update = current instanceof Duration ? current.withValue(next) : next;
+    setState({ ...state, [prop]: update });
     updateChart();
+  });
+
+  const updateRetryPolicyParamUnit = useCallback(function updateRetryPolicyParamUnit(prop, unit) {
+    const current = state[prop];
+    if (!(current instanceof Duration)) return;
+    setState({ ...state, [prop]: current.withUnit(unit) });
   });
 
   const updateChart = useCallback(function updateChart() {
@@ -135,8 +142,10 @@ export default function RetrySimulator() {
     }
     const chart = chartCanvas.current.chart;
 
-    const { backoffCoefficient, initialInterval } = state;
-    let { maximumInterval, maximumAttempts } = state;
+    const { backoffCoefficient } = state;
+    const initialInterval = state.initialInterval.toMilliseconds();
+    const maximumInterval = state.maximumInterval.toMilliseconds();
+    let { maximumAttempts } = state;
     const labels = [];
     const values = [];
     maximumAttempts = maximumAttempts === 0 ? 10 : maximumAttempts;
@@ -281,21 +290,33 @@ export default function RetrySimulator() {
           <div className={styles.scheduleTime}>
             <div className={styles.inputContainer}>
               <label className={styles.numberInputLabel}>Task Time in Queue</label>
+              {/* With float: right, the element rendered first ends up rightmost. */}
+              <select
+                className={styles.unitSelect}
+                value={state.scheduleTime.unit}
+                onChange={(ev) => updateRetryPolicyParamUnit("scheduleTime", ev.target.value)}
+              >
+                {DURATION_UNITS.map((u) => (
+                  <option key={u} value={u}>
+                    {UNIT_LABELS[u]}
+                  </option>
+                ))}
+              </select>
               <input
                 className={styles.numberInput}
-                value={state.scheduleTime}
+                value={state.scheduleTime.value}
                 onChange={(ev) => updateRetryPolicyParam("scheduleTime", ev)}
                 type="number"
               />
             </div>
             <input
               type="range"
-              value={state.scheduleTime}
+              value={state.scheduleTime.value}
               onChange={(ev) => updateRetryPolicyParam("scheduleTime", ev)}
               className={styles.slider}
               min="0"
-              max="1000"
-              step="5"
+              max={1000 / (state.scheduleTime.toMilliseconds() / state.scheduleTime.value || 1)}
+              step="0.005"
             />
           </div>
           <div className="retries-list">
@@ -312,18 +333,19 @@ export default function RetrySimulator() {
               );
             })}
           </div>
-          <button className={styles.addButton} onClick={() => addRetry(true, 1)}>
+          <button className={styles.addButton} onClick={() => addRetry(true)}>
             + Add
           </button>
         </div>
         <div className={styles.retryCol}>
-          <h3>Activity Timeouts (in ms)</h3>
+          <h3>Activity Timeouts</h3>
           <RetryPolicyParamInputs
             param="startToCloseTimeout"
             value={state.startToCloseTimeout}
             max={100000}
             step={100}
             updateRetryPolicyParam={updateRetryPolicyParam}
+            updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
           <RetryPolicyParamInputs
             param="scheduleToStartTimeout"
@@ -331,21 +353,24 @@ export default function RetrySimulator() {
             max={100000}
             step={100}
             updateRetryPolicyParam={updateRetryPolicyParam}
+            updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
           <RetryPolicyParamInputs
             param="scheduleToCloseTimeout"
             value={state.scheduleToCloseTimeout}
-            max={100000}
-            step={100}
+            max={24 * 60 * 60 * 1000}
+            step={60 * 1000}
             updateRetryPolicyParam={updateRetryPolicyParam}
+            updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
-          <h3>Retry Policy (in ms)</h3>
+          <h3>Retry Policy</h3>
           <RetryPolicyParamInputs
             param="backoffCoefficient"
             value={state.backoffCoefficient}
             min={1}
             max={10}
             updateRetryPolicyParam={updateRetryPolicyParam}
+            updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
           <RetryPolicyParamInputs
             param="initialInterval"
@@ -353,11 +378,13 @@ export default function RetrySimulator() {
             max={10000}
             step={50}
             updateRetryPolicyParam={updateRetryPolicyParam}
+            updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
           <RetryPolicyParamInputs
             param="maximumAttempts"
             value={state.maximumAttempts}
             updateRetryPolicyParam={updateRetryPolicyParam}
+            updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
           <RetryPolicyParamInputs
             param="maximumInterval"
@@ -365,6 +392,7 @@ export default function RetrySimulator() {
             max={100000}
             step={100}
             updateRetryPolicyParam={updateRetryPolicyParam}
+            updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
         </div>
       </div>
@@ -390,6 +418,7 @@ export default function RetrySimulator() {
 
 function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
   const count = retry.count ?? 1;
+  const runtime = retry.runtime;
   return (
     <div className={styles.retry} key={"retry-" + index}>
       <div className={styles.inputContainer}>
@@ -402,11 +431,29 @@ function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
           <option value="fails">Fails after</option>
           <option value="succeeds">Succeeds after</option>
         </select>
+        {/* With float: right, the element rendered first ends up rightmost. */}
+        <select
+          className={styles.unitSelect}
+          value={runtime.unit}
+          onChange={(ev) =>
+            updateRetry(index, { runtime: runtime.withUnit(ev.target.value) })
+          }
+        >
+          {DURATION_UNITS.map((u) => (
+            <option key={u} value={u}>
+              {UNIT_LABELS[u]}
+            </option>
+          ))}
+        </select>
         <input
           type="number"
           className={styles.numberInput}
-          value={retry.runtimeMS}
-          onChange={(ev) => updateRetry(index, { runtimeMS: ev.target.value })}
+          value={runtime.value}
+          onChange={(ev) => {
+            const next = +ev.target.value;
+            if (isNaN(next)) return;
+            updateRetry(index, { runtime: runtime.withValue(next) });
+          }}
         />
         <span className={styles.removeRetry} onClick={() => deleteRetry(index)}>
           &times;
@@ -424,19 +471,12 @@ function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
             onChange={(ev) => updateRetry(index, { count: ev.target.value })}
           />
           <span className={styles.retryCountSuffix}>
-            {count === 1 ? "attempt" : `attempts, avg ${retry.runtimeMS} ms each`}
+            {count === 1
+              ? "attempt"
+              : `attempts, avg ${runtime.value} ${runtime.unit} each`}
           </span>
         </div>
       )}
-      <input
-        type="range"
-        className={styles.slider}
-        value={retry.runtimeMS}
-        onChange={(ev) => updateRetry(index, { runtimeMS: ev.target.value })}
-        min="0"
-        max="1000"
-        step="5"
-      />
     </div>
   );
 }
@@ -490,8 +530,27 @@ const PARAM_METADATA = {
   },
 };
 
-function RetryPolicyParamInputs({ param, value, updateRetryPolicyParam, min, max, step }) {
+function RetryPolicyParamInputs({
+  param,
+  value,
+  updateRetryPolicyParam,
+  updateRetryPolicyParamUnit,
+  min,
+  max,
+  step,
+}) {
   const meta = PARAM_METADATA[param];
+  // Duration fields surface a unit dropdown and render the input/slider in
+  // the chosen display unit. Plain-number fields (backoffCoefficient,
+  // maximumAttempts) keep the original layout.
+  const isDuration = value instanceof Duration;
+  const inputValue = isDuration ? value.value : value;
+  // Slider bounds are configured in ms for duration fields; scale them down
+  // to the chosen display unit so the slider tracks the input.
+  const unitFactor = isDuration ? value.toMilliseconds() / value.value || 1 : 1;
+  const scale = isDuration
+    ? (msValue) => (msValue == null ? msValue : msValue / unitFactor)
+    : (v) => v;
   return (
     <div className={styles.parameter}>
       <div className={styles.inputContainer}>
@@ -503,8 +562,22 @@ function RetryPolicyParamInputs({ param, value, updateRetryPolicyParam, min, max
         >
           {meta.label}
         </a>
+        {/* With float: right, the element rendered first ends up rightmost. */}
+        {isDuration && (
+          <select
+            className={styles.unitSelect}
+            value={value.unit}
+            onChange={(ev) => updateRetryPolicyParamUnit(param, ev.target.value)}
+          >
+            {DURATION_UNITS.map((u) => (
+              <option key={u} value={u}>
+                {UNIT_LABELS[u]}
+              </option>
+            ))}
+          </select>
+        )}
         <input
-          value={value}
+          value={inputValue}
           onChange={(ev) => updateRetryPolicyParam(param, ev)}
           className={styles.numberInput}
           type="number"
@@ -515,13 +588,13 @@ function RetryPolicyParamInputs({ param, value, updateRetryPolicyParam, min, max
         <span className={styles.parameterDefault}>Default: {meta.defaultDisplay}</span>
       </div>
       <input
-        value={value}
+        value={inputValue}
         onChange={(ev) => updateRetryPolicyParam(param, ev)}
         type="range"
         className={styles.slider}
-        min={min || 0}
-        max={max || 100}
-        step={step || 1}
+        min={scale(min) || 0}
+        max={scale(max) || 100}
+        step={isDuration ? scale(step) || 0.001 : step || 1}
       />
     </div>
   );
@@ -543,37 +616,38 @@ function retryPolicyCode(state) {
     delete value.retryPolicy.maximumAttempts;
   }
   // Omit maximumInterval when it matches the SDK default (100 × initialInterval).
-  if (value.retryPolicy.maximumInterval === 100 * value.retryPolicy.initialInterval) {
+  if (
+    value.retryPolicy.maximumInterval.toMilliseconds() ===
+    100 * value.retryPolicy.initialInterval.toMilliseconds()
+  ) {
     delete value.retryPolicy.maximumInterval;
   }
-  if (value.scheduleToStartTimeout === 0) {
+  if (value.scheduleToStartTimeout.toMilliseconds() === 0) {
     delete value.scheduleToStartTimeout;
   }
-  if (value.scheduleToCloseTimeout === 0) {
+  if (value.scheduleToCloseTimeout.toMilliseconds() === 0) {
     delete value.scheduleToCloseTimeout;
   }
+  if (value.startToCloseTimeout.toMilliseconds() === 0) {
+    delete value.startToCloseTimeout;
+  }
   if (state.language === "typescript") {
-    return JSON.stringify(value, null, "  ");
+    // For TypeScript output, render durations in ms (the SDK contract).
+    const tsValue = JSON.parse(
+      JSON.stringify(value, (_, v) => (v instanceof Duration ? v.toMilliseconds() : v))
+    );
+    return JSON.stringify(tsValue, null, "  ");
   } else if (state.language === "go") {
-    // Activity timeouts and retry-policy intervals are time.Duration in Go.
-    // backoffCoefficient and maximumAttempts are numeric counts, not durations.
-    const goDurationFields = new Set([
-      "scheduleToCloseTimeout",
-      "startToCloseTimeout",
-      "scheduleToStartTimeout",
-      "initialInterval",
-      "maximumInterval",
-    ]);
-    const formatGoValue = (key, v) =>
-      goDurationFields.has(key) ? `${v} * time.Millisecond` : v;
+    const formatGoValue = (v) =>
+      v instanceof Duration ? `${v.value} * ${UNIT_TO_GO[v.unit]}` : v;
     const val = [
       "workflow.ActivityOptions{",
       ...Object.keys(value)
         .filter((key) => key !== "retryPolicy")
-        .map((key) => `\t${capitalizeFirstLetter(key)}: ${formatGoValue(key, value[key])},`),
+        .map((key) => `\t${capitalizeFirstLetter(key)}: ${formatGoValue(value[key])},`),
       "\tRetryPolicy: &temporal.RetryPolicy{",
       ...Object.keys(value.retryPolicy).map(
-        (key) => `\t\t${capitalizeFirstLetter(key)}: ${formatGoValue(key, value.retryPolicy[key])}`
+        (key) => `\t\t${capitalizeFirstLetter(key)}: ${formatGoValue(value.retryPolicy[key])}`
       ),
       "\t}",
       "}",
