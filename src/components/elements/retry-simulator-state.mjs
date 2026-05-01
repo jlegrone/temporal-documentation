@@ -263,19 +263,23 @@ export function calculateResult(state) {
     return { success: false, runtimeMS: 0, attempts: 0, reason: "No retries" };
   }
 
-  // If the configured chain ends in a failure, the user is implicitly saying
-  // "and it would keep failing this way." We project additional failures with
-  // the last failure's runtime until something terminates the chain.
+  // If the configured chain ends in a failure (or in a success that would be
+  // killed by startToCloseTimeout — Temporal treats that as a per-attempt
+  // timeout, not a successful run), the user is implicitly saying "and it
+  // would keep going this way." Project additional attempts with the last
+  // configured runtime until something terminates the chain.
   const lastConfigured = flatRetries[flatRetries.length - 1];
-  const projectedRuntimeMS = lastConfigured.success ? null : lastConfigured.runtimeMS;
+  const lastWouldTimeOut =
+    startToCloseTimeout > 0 && lastConfigured.runtimeMS >= startToCloseTimeout;
+  const lastWouldFail = !lastConfigured.success || lastWouldTimeOut;
+  const projectedRuntimeMS = lastWouldFail ? lastConfigured.runtimeMS : null;
 
   // Detect the open-ended infinite case up front so we don't spin in the
-  // projection loop below. (No max attempts, no end-to-end timeout, and the
-  // per-attempt runtime stays below startToCloseTimeout.)
+  // projection loop below. With no maximumAttempts and no scheduleToCloseTimeout,
+  // a perpetually failing chain (whether by per-attempt timeout or otherwise)
+  // would keep retrying forever.
   if (projectedRuntimeMS != null) {
-    const startToCloseSafe =
-      startToCloseTimeout === 0 || projectedRuntimeMS < startToCloseTimeout;
-    if (maximumAttempts === 0 && scheduleToCloseTimeout === 0 && startToCloseSafe) {
+    if (maximumAttempts === 0 && scheduleToCloseTimeout === 0) {
       return { success: null, runtimeMS: 0, attempts: Infinity, reason: "neverTerminates" };
     }
   }
@@ -303,16 +307,17 @@ export function calculateResult(state) {
       isSuccess = false;
     }
 
-    totalRuntimeMS += currentRetryRuntime;
-
+    // startToCloseTimeout is a per-attempt cap, not a terminal failure. If the
+    // attempt would run longer than the timeout, the Server kills it after
+    // `startToCloseTimeout` ms and the attempt counts as a failure regardless
+    // of the user's intended outcome. The retry policy then decides whether
+    // to schedule another Activity Task.
+    let attemptElapsed = currentRetryRuntime;
     if (startToCloseTimeout > 0 && currentRetryRuntime >= startToCloseTimeout) {
-      return {
-        success: false,
-        runtimeMS: totalRuntimeMS,
-        attempts: i + 1,
-        reason: "startToCloseTimeout",
-      };
+      attemptElapsed = startToCloseTimeout;
+      isSuccess = false;
     }
+    totalRuntimeMS += attemptElapsed;
 
     if (isSuccess) {
       return { success: true, runtimeMS: totalRuntimeMS, attempts: i + 1 };

@@ -394,16 +394,49 @@ test("calculateResult: startToCloseTimeout=0 does not abort the chain", () => {
   assert.equal(result.success, true);
 });
 
-test("calculateResult: per-attempt runtime ≥ startToCloseTimeout returns startToCloseTimeout reason", () => {
+test("calculateResult: runtime > startToCloseTimeout treats each attempt as a per-attempt timeout but retry continues", () => {
+  // Temporal's startToCloseTimeout is per-attempt. An attempt that would run
+  // longer than the timeout is killed by the Server, counted as a failure,
+  // and the retry policy schedules another. Here every attempt times out, so
+  // the simulation runs until maximumAttempts caps the chain.
   const state = {
     ...DEFAULTS,
     startToCloseTimeout: new Duration(50, "ms"),
+    maximumAttempts: 3,
     retries: [{ success: false, runtime: new Duration(100, "ms") }],
   };
   const result = calculateResult(state);
   assert.equal(result.success, false);
-  assert.equal(result.reason, "startToCloseTimeout");
-  assert.equal(result.attempts, 1);
+  assert.equal(result.reason, "maximumAttempts");
+  assert.equal(result.attempts, 3);
+});
+
+test("calculateResult: a configured success that exceeds startToCloseTimeout is treated as a timed-out failure", () => {
+  // Even if the user marks the attempt as a success, Temporal kills it at
+  // the per-attempt timeout and the retry policy continues.
+  const state = {
+    ...DEFAULTS,
+    startToCloseTimeout: new Duration(50, "ms"),
+    maximumAttempts: 2,
+    retries: [{ success: true, runtime: new Duration(100, "ms") }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, false);
+  assert.equal(result.reason, "maximumAttempts");
+});
+
+test("calculateResult: per-attempt timeout caps elapsed time at startToCloseTimeout", () => {
+  // Attempt's wall-clock contribution is min(runtime, startToCloseTimeout).
+  // initialInterval=1s, backoff=2 → first retry interval is 2s, second is 4s.
+  // 3 timed-out attempts at 50ms each + 2s + 4s = 6150ms total.
+  const state = {
+    ...DEFAULTS,
+    startToCloseTimeout: new Duration(50, "ms"),
+    maximumAttempts: 3,
+    retries: [{ success: false, runtime: new Duration(10000, "ms") }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.runtimeMS, 50 + 2000 + 50 + 4000 + 50);
 });
 
 test("calculateResult: per-attempt runtime < startToCloseTimeout proceeds normally", () => {
@@ -461,16 +494,19 @@ test("calculateResult: scheduleTime exactly equal to scheduleToStartTimeout stil
   assert.equal(result.reason, "scheduleTime");
 });
 
-test("calculateResult: per-attempt runtime exactly equal to startToCloseTimeout still bails out", () => {
-  // Boundary case for the >= comparison on per-attempt runtime.
+test("calculateResult: per-attempt runtime exactly equal to startToCloseTimeout still times the attempt out", () => {
+  // Boundary case for the >= comparison: at equality the attempt is killed.
+  // With maxAttempts=1 the chain ends immediately as a timed-out failure.
   const state = {
     ...DEFAULTS,
     startToCloseTimeout: new Duration(100, "ms"),
-    retries: [{ success: false, runtime: new Duration(100, "ms") }],
+    maximumAttempts: 1,
+    retries: [{ success: true, runtime: new Duration(100, "ms") }],
   };
   const result = calculateResult(state);
   assert.equal(result.success, false);
-  assert.equal(result.reason, "startToCloseTimeout");
+  assert.equal(result.reason, "maximumAttempts");
+  assert.equal(result.runtimeMS, 100);
 });
 
 test("calculateResult: totalRuntimeMS exactly equal to scheduleToCloseTimeout still bails out on that attempt", () => {
