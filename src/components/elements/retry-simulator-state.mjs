@@ -32,7 +32,11 @@ const SUPPORTED_LANGUAGES = ["typescript", "go"];
 
 function encodeRetries(retries) {
   return retries
-    .map((r) => `${r.success ? "succeed" : "fail"}:${r.runtimeMS}`)
+    .map((r) => {
+      const base = `${r.success ? "succeed" : "fail"}:${r.runtimeMS}`;
+      const count = r.count ?? 1;
+      return count > 1 ? `${base}*${count}` : base;
+    })
     .join(",");
 }
 
@@ -40,15 +44,22 @@ function decodeRetries(raw) {
   const parts = raw.split(",");
   const retries = [];
   for (const part of parts) {
-    const [outcome, runtimeRaw] = part.split(":");
-    if (outcome !== "succeed" && outcome !== "fail") {
+    const [outcome, rest] = part.split(":");
+    if ((outcome !== "succeed" && outcome !== "fail") || rest == null) {
       return null;
     }
+    const [runtimeRaw, countRaw] = rest.split("*");
     const runtimeMS = Number(runtimeRaw);
     if (!Number.isFinite(runtimeMS)) {
       return null;
     }
-    retries.push({ success: outcome === "succeed", runtimeMS });
+    const count = countRaw == null ? 1 : Number(countRaw);
+    if (!Number.isInteger(count) || count < 1) {
+      return null;
+    }
+    const retry = { success: outcome === "succeed", runtimeMS };
+    if (count > 1) retry.count = count;
+    retries.push(retry);
   }
   return retries.length > 0 ? retries : null;
 }
@@ -57,7 +68,11 @@ function retriesEqualDefault(retries) {
   const def = DEFAULT_STATE.retries;
   if (retries.length !== def.length) return false;
   for (let i = 0; i < retries.length; ++i) {
-    if (retries[i].success !== def[i].success || retries[i].runtimeMS !== def[i].runtimeMS) {
+    if (
+      retries[i].success !== def[i].success ||
+      retries[i].runtimeMS !== def[i].runtimeMS ||
+      (retries[i].count ?? 1) !== (def[i].count ?? 1)
+    ) {
       return false;
     }
   }
@@ -112,14 +127,20 @@ export function calculateResult(state) {
     };
   }
 
+  // Expand each retry entry by its count so a single configured failure
+  // can stand in for many sequential attempts with the same runtime.
+  const flatRetries = state.retries.flatMap((r) =>
+    Array.from({ length: r.count ?? 1 }, () => ({ success: r.success, runtimeMS: r.runtimeMS }))
+  );
+
   let retryIntervalMS = initialInterval;
   let totalRuntimeMS = 0;
 
-  for (let i = 0; i < state.retries.length; ++i) {
-    const currentRetryRuntime = state.retries[i].runtimeMS;
+  for (let i = 0; i < flatRetries.length; ++i) {
+    const currentRetryRuntime = flatRetries[i].runtimeMS;
     totalRuntimeMS += currentRetryRuntime;
 
-    if (currentRetryRuntime >= startToCloseTimeout) {
+    if (startToCloseTimeout > 0 && currentRetryRuntime >= startToCloseTimeout) {
       return {
         success: false,
         runtimeMS: totalRuntimeMS,
@@ -128,7 +149,7 @@ export function calculateResult(state) {
       };
     }
 
-    if (!state.retries[i].success) {
+    if (!flatRetries[i].success) {
       if (maximumAttempts > 0 && i + 1 >= maximumAttempts) {
         return {
           success: false,
@@ -138,7 +159,20 @@ export function calculateResult(state) {
         };
       }
 
-      if (i + 1 >= state.retries.length) {
+      if (i + 1 >= flatRetries.length) {
+        // No follow-up retry is configured. If nothing else would ever
+        // terminate the chain, treat this as an open-ended infinite retry
+        // loop rather than a definite failure.
+        const startToCloseSafe =
+          startToCloseTimeout === 0 || currentRetryRuntime < startToCloseTimeout;
+        if (maximumAttempts === 0 && scheduleToCloseTimeout === 0 && startToCloseSafe) {
+          return {
+            success: null,
+            runtimeMS: totalRuntimeMS,
+            attempts: Infinity,
+            reason: "neverTerminates",
+          };
+        }
         return {
           success: false,
           runtimeMS: totalRuntimeMS,
@@ -151,7 +185,7 @@ export function calculateResult(state) {
 
       totalRuntimeMS += retryIntervalMS;
 
-      if (totalRuntimeMS >= scheduleToCloseTimeout) {
+      if (scheduleToCloseTimeout > 0 && totalRuntimeMS >= scheduleToCloseTimeout) {
         return {
           success: false,
           runtimeMS: totalRuntimeMS,
@@ -162,7 +196,7 @@ export function calculateResult(state) {
     }
   }
 
-  if (state.retries.length === 0) {
+  if (flatRetries.length === 0) {
     return {
       success: false,
       runtimeMS: 0,
@@ -173,7 +207,7 @@ export function calculateResult(state) {
 
   return {
     success: true,
-    attempts: state.retries.length,
+    attempts: flatRetries.length,
     runtimeMS: totalRuntimeMS,
   };
 }

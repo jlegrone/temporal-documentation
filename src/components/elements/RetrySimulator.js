@@ -78,7 +78,18 @@ export default function RetrySimulator() {
         delete update.runtimeMS;
       }
     }
+    if (update.count != null) {
+      update.count = Math.max(1, Math.floor(+update.count));
+      if (isNaN(update.count)) {
+        delete update.count;
+      }
+    }
     retries[index] = { ...retries[index], ...update };
+    // count=1 is the default; drop it from state so encoded state stays minimal
+    // and serialized comparisons (round-trip tests) line up.
+    if (retries[index].count === 1) {
+      delete retries[index].count;
+    }
     setState({ ...state, retries });
   });
 
@@ -354,11 +365,13 @@ export default function RetrySimulator() {
       </div>
       <div className={styles.retryRow}>
         <div className={styles.retryCol}>
-          <div className={styles.result + " " + (success ? styles.success : styles.fail)}>
+          <div className={styles.result + " " + (success === true ? styles.success : styles.fail)}>
             <h3 className={styles.resultText}>
-              {success ? "Success" : "Failed"} after {runtimeMS} ms ({attempts}{" "}
-              {attempts === 1 ? "attempt" : "attempts"})
-              {success ? "" : ": " + reason}
+              {success === null
+                ? "Never terminates — unlimited attempts"
+                : `${success ? "Success" : "Failed"} after ${runtimeMS} ms (${attempts} ${
+                    attempts === 1 ? "attempt" : "attempts"
+                  })${success ? "" : ": " + reason}`}
             </h3>
           </div>
         </div>
@@ -376,6 +389,7 @@ export default function RetrySimulator() {
 }
 
 function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
+  const count = retry.count ?? 1;
   return (
     <div className={styles.retry} key={"retry-" + index}>
       <div className={styles.inputContainer}>
@@ -398,6 +412,22 @@ function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
           &times;
         </span>
       </div>
+      {!retry.success && (
+        <div className={styles.retryCountRow}>
+          <span className={styles.retryCountLabel}>×</span>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            className={styles.retryCountInput}
+            value={count}
+            onChange={(ev) => updateRetry(index, { count: ev.target.value })}
+          />
+          <span className={styles.retryCountSuffix}>
+            {count === 1 ? "attempt" : `attempts, avg ${retry.runtimeMS} ms each`}
+          </span>
+        </div>
+      )}
       <input
         type="range"
         className={styles.slider}

@@ -142,6 +142,65 @@ test("explicit maximumInterval in URL overrides the computed default", () => {
   assert.equal(decoded.maximumInterval, 10000);
 });
 
+test("retries with count round-trip through the URL", () => {
+  const state = {
+    ...DEFAULTS,
+    scheduleToCloseTimeout: 1_000_000_000,
+    retries: [
+      { success: false, runtimeMS: 100, count: 50 },
+      { success: true, runtimeMS: 100 },
+    ],
+  };
+  assert.deepEqual(roundTrip(state), state);
+});
+
+test("retries=fail:100*50 decodes to a single entry with count=50", () => {
+  const decoded = decodeStateFromParams("?retries=fail:100*50");
+  assert.deepEqual(decoded.retries, [{ success: false, runtimeMS: 100, count: 50 }]);
+});
+
+test("retries with count=1 omit the *N suffix from the URL", () => {
+  const state = {
+    ...DEFAULTS,
+    retries: [{ success: false, runtimeMS: 100, count: 1 }, { success: true, runtimeMS: 1 }],
+  };
+  assert.equal(
+    encodeStateToParams(state).get("retries"),
+    "fail:100,succeed:1"
+  );
+});
+
+test("malformed retry counts decode to defaults", () => {
+  for (const malformed of [
+    "?retries=fail:100*0",
+    "?retries=fail:100*-5",
+    "?retries=fail:100*abc",
+    "?retries=fail:100*1.5",
+  ]) {
+    assert.deepEqual(decodeStateFromParams(malformed).retries, DEFAULTS.retries);
+  }
+});
+
+test("calculateResult expands count into sequential attempts", () => {
+  // 50 failures with default initial interval/backoff, then a success.
+  const expandedState = {
+    ...DEFAULTS,
+    scheduleToCloseTimeout: 1_000_000_000,
+    retries: [{ success: false, runtimeMS: 100, count: 50 }, { success: true, runtimeMS: 100 }],
+  };
+  // The same scenario with each failure spelled out individually.
+  const explicitState = {
+    ...DEFAULTS,
+    scheduleToCloseTimeout: 1_000_000_000,
+    retries: [
+      ...Array.from({ length: 50 }, () => ({ success: false, runtimeMS: 100 })),
+      { success: true, runtimeMS: 100 },
+    ],
+  };
+  assert.deepEqual(calculateResult(expandedState), calculateResult(explicitState));
+  assert.equal(calculateResult(expandedState).attempts, 51);
+});
+
 test("retries=fail:100,fail:200,succeed:50 decodes correctly", () => {
   const decoded = decodeStateFromParams("?retries=fail:100,fail:200,succeed:50");
   assert.deepEqual(decoded.retries, [
@@ -199,6 +258,72 @@ test("calculateResult: maximumInterval caps the retry interval growth", () => {
   const tightCap = { ...baseState, maximumInterval: 5000 };
   const looseCap = { ...baseState, maximumInterval: 1_000_000 };
   assert.ok(calculateResult(tightCap).runtimeMS < calculateResult(looseCap).runtimeMS);
+});
+
+test("calculateResult: failure-only chain with no terminating condition reports infinite retries", () => {
+  // No success entry, no maximumAttempts cap, no scheduleToCloseTimeout cap,
+  // and per-attempt runtime stays below startToCloseTimeout. The activity
+  // would retry indefinitely.
+  const state = {
+    ...DEFAULTS,
+    startToCloseTimeout: 27400,
+    retries: [{ success: false, runtimeMS: 10000, count: 10 }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, null);
+  assert.equal(result.attempts, Infinity);
+  assert.equal(result.reason, "neverTerminates");
+});
+
+test("calculateResult: failure-only chain falls back to All retries failed when maximumAttempts is set", () => {
+  const state = {
+    ...DEFAULTS,
+    maximumAttempts: 100, // bounded — chain isn't actually infinite
+    retries: [{ success: false, runtimeMS: 1, count: 5 }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, false);
+  assert.equal(result.reason, "All retries failed");
+});
+
+test("calculateResult: failure-only chain falls back to All retries failed when scheduleToCloseTimeout is set", () => {
+  const state = {
+    ...DEFAULTS,
+    scheduleToCloseTimeout: 1_000_000,
+    retries: [{ success: false, runtimeMS: 1, count: 5 }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, false);
+  assert.equal(result.reason, "All retries failed");
+});
+
+test("calculateResult: scheduleToCloseTimeout=0 does not abort the chain", () => {
+  // Regression: a 0 sentinel for scheduleToCloseTimeout used to fire after
+  // the first failure (totalRuntimeMS >= 0 is always true). With ∞ semantics
+  // the chain should run to completion.
+  const state = {
+    ...DEFAULTS,
+    scheduleToCloseTimeout: 0,
+    retries: [
+      { success: false, runtimeMS: 100 },
+      { success: false, runtimeMS: 100 },
+      { success: true, runtimeMS: 100 },
+    ],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, true);
+  assert.equal(result.attempts, 3);
+});
+
+test("calculateResult: startToCloseTimeout=0 does not abort the chain", () => {
+  const state = {
+    ...DEFAULTS,
+    startToCloseTimeout: 0,
+    scheduleToCloseTimeout: 1_000_000_000,
+    retries: [{ success: true, runtimeMS: 5000 }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, true);
 });
 
 test("calculateResult: maximumAttempts limits retries", () => {

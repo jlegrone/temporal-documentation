@@ -107,6 +107,26 @@
   max-width: 29%;
 }
 
+.retryCountRow {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  margin: 0.4em 0;
+  font-size: 0.9em;
+}
+
+.retryCountLabel {
+  color: var(--ifm-color-emphasis-700);
+}
+
+.retryCountInput {
+  width: 5em;
+}
+
+.retryCountSuffix {
+  color: var(--ifm-color-emphasis-700);
+}
+
 .removeRetry {
   position: absolute;
   right: 1px;
