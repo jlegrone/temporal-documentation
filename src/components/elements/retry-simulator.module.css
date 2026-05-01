@@ -175,6 +175,13 @@
   overflow-x: scroll;
 }
 
+/* Override the Prism theme's default tab-size: 4 inside our snippets so
+   tabs in the Go samples render compactly instead of with 4-char gaps. */
+.codeBlock pre,
+.codeBlock code {
+  tab-size: 2;
+}
+
 .parameter {
   padding: 10px;
   padding-top: 15px;
