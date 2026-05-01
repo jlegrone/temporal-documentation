@@ -555,13 +555,26 @@ function retryPolicyCode(state) {
   if (state.language === "typescript") {
     return JSON.stringify(value, null, "  ");
   } else if (state.language === "go") {
+    // Activity timeouts and retry-policy intervals are time.Duration in Go.
+    // backoffCoefficient and maximumAttempts are numeric counts, not durations.
+    const goDurationFields = new Set([
+      "scheduleToCloseTimeout",
+      "startToCloseTimeout",
+      "scheduleToStartTimeout",
+      "initialInterval",
+      "maximumInterval",
+    ]);
+    const formatGoValue = (key, v) =>
+      goDurationFields.has(key) ? `${v} * time.Millisecond` : v;
     const val = [
       "workflow.ActivityOptions{",
       ...Object.keys(value)
         .filter((key) => key !== "retryPolicy")
-        .map((key) => `\t${capitalizeFirstLetter(key)}: ${value[key]},`),
+        .map((key) => `\t${capitalizeFirstLetter(key)}: ${formatGoValue(key, value[key])},`),
       "\tRetryPolicy: &temporal.RetryPolicy{",
-      ...Object.keys(value.retryPolicy).map((key) => `\t\t${capitalizeFirstLetter(key)}: ${value.retryPolicy[key]}`),
+      ...Object.keys(value.retryPolicy).map(
+        (key) => `\t\t${capitalizeFirstLetter(key)}: ${formatGoValue(key, value.retryPolicy[key])}`
+      ),
       "\t}",
       "}",
     ].join("\n");
