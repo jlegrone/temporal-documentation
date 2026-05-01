@@ -106,6 +106,35 @@ export default function RetrySimulator() {
       return;
     }
     values = JSON.parse(values);
+
+    if (values.scenario === "outage") {
+      const period = new Duration(values.periodValue, values.periodUnit);
+      setState({
+        ...state,
+        retries: [
+          { success: false, runtime: new Duration(100, "ms"), period },
+          { success: true, runtime: new Duration(100, "ms") },
+        ],
+      });
+      return;
+    }
+
+    if (values.scenario === "latency") {
+      // Latency only "matters" when each attempt is killed by the per-attempt
+      // timeout, otherwise the first slow success ends the simulation. Set a
+      // tight startToCloseTimeout so the chain demonstrates retries.
+      const period = new Duration(values.periodValue, values.periodUnit);
+      setState({
+        ...state,
+        startToCloseTimeout: new Duration(2, "s"),
+        retries: [
+          { success: true, runtime: new Duration(5, "s"), period },
+          { success: true, runtime: new Duration(100, "ms") },
+        ],
+      });
+      return;
+    }
+
     const requestRuntimeMS = values.requestRuntimeMS;
     const successRate = values.successRate;
     const retries = [];
@@ -290,6 +319,12 @@ export default function RetrySimulator() {
               <option value='{"requestRuntimeMS": 100, "successRate": 0.5}'>
                 Slow request (100ms), 50% success rate
               </option>
+              <option value='{"scenario":"outage","periodValue":1,"periodUnit":"h"}'>
+                Sustained downstream outage (1 hour)
+              </option>
+              <option value='{"scenario":"latency","periodValue":30,"periodUnit":"m"}'>
+                Sustained downstream latency (30 min)
+              </option>
             </select>
           </div>
           <div className={styles.scheduleTime}>
@@ -459,68 +494,68 @@ function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
         </span>
       </div>
       {!retry.success && (
-        <>
-          <div className={styles.retryCountRow}>
-            <input
-              type="radio"
-              name={`retryRepeat-${index}`}
-              checked={!periodMode}
-              onChange={() => updateRetry(index, { period: null, count: count })}
-            />
-            <span className={styles.retryCountLabel}>×</span>
-            <input
-              type="number"
-              min={1}
-              step={1}
-              className={styles.retryCountInput}
-              value={count}
-              disabled={periodMode}
-              onChange={(ev) => updateRetry(index, { count: ev.target.value, period: null })}
-            />
-            <span className={styles.retryCountSuffix}>
-              {count === 1
-                ? "attempt"
-                : `attempts, avg ${runtime.value} ${runtime.unit} each`}
-            </span>
-          </div>
-          <div className={styles.retryCountRow}>
-            <input
-              type="radio"
-              name={`retryRepeat-${index}`}
-              checked={periodMode}
-              onChange={() => updateRetry(index, { period, count: null })}
-            />
-            <span className={styles.retryCountLabel}>for</span>
-            <input
-              type="number"
-              min={0}
-              step="any"
-              className={styles.retryCountInput}
-              value={period.value}
-              disabled={!periodMode}
-              onChange={(ev) => {
-                const next = +ev.target.value;
-                if (isNaN(next)) return;
-                updateRetry(index, { period: period.withValue(next), count: null });
-              }}
-            />
-            <select
-              className={styles.unitSelect}
-              value={period.unit}
-              disabled={!periodMode}
-              onChange={(ev) =>
-                updateRetry(index, { period: period.withUnit(ev.target.value), count: null })
-              }
-            >
-              {DURATION_UNITS.map((u) => (
-                <option key={u} value={u}>
-                  {UNIT_LABELS[u]}
-                </option>
-              ))}
-            </select>
-          </div>
-        </>
+        <div className={styles.retryCountRow}>
+          <input
+            type="radio"
+            name={`retryRepeat-${index}`}
+            checked={!periodMode}
+            onChange={() => updateRetry(index, { period: null, count: count })}
+          />
+          <span className={styles.retryCountLabel}>×</span>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            className={styles.retryCountInput}
+            value={count}
+            disabled={periodMode}
+            onChange={(ev) => updateRetry(index, { count: ev.target.value, period: null })}
+          />
+          <span className={styles.retryCountSuffix}>
+            {count === 1
+              ? "attempt"
+              : `attempts, avg ${runtime.value} ${runtime.unit} each`}
+          </span>
+        </div>
       )}
+      <div className={styles.retryCountRow}>
+        {!retry.success && (
+          <input
+            type="radio"
+            name={`retryRepeat-${index}`}
+            checked={periodMode}
+            onChange={() => updateRetry(index, { period, count: null })}
+          />
+        )}
+        <span className={styles.retryCountLabel}>for</span>
+        <input
+          type="number"
+          min={0}
+          step="any"
+          className={styles.retryCountInput}
+          value={period.value}
+          disabled={!retry.success && !periodMode}
+          onChange={(ev) => {
+            const next = +ev.target.value;
+            if (isNaN(next)) return;
+            updateRetry(index, { period: period.withValue(next), count: null });
+          }}
+        />
+        <select
+          className={styles.unitSelect}
+          value={period.unit}
+          disabled={!retry.success && !periodMode}
+          onChange={(ev) =>
+            updateRetry(index, { period: period.withUnit(ev.target.value), count: null })
+          }
+        >
+          {DURATION_UNITS.map((u) => (
+            <option key={u} value={u}>
+              {UNIT_LABELS[u]}
+            </option>
+          ))}
+        </select>
+      </div>
     </div>
   );
 }
