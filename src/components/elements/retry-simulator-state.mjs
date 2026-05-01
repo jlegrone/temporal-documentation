@@ -11,7 +11,7 @@ export const DEFAULT_STATE = {
   maximumInterval: 0,
 };
 
-export const NUMERIC_FIELDS = [
+const NUMERIC_FIELDS = [
   "scheduleToStartTimeout",
   "scheduleToCloseTimeout",
   "startToCloseTimeout",
@@ -22,7 +22,7 @@ export const NUMERIC_FIELDS = [
   "maximumInterval",
 ];
 
-export const SUPPORTED_LANGUAGES = ["typescript", "go"];
+const SUPPORTED_LANGUAGES = ["typescript", "go"];
 
 function encodeRetries(retries) {
   return retries
