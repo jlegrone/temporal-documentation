@@ -30,6 +30,13 @@ const OUTCOME_EVENT_TYPE = {
   timedOut: "ActivityTaskTimedOut",
 };
 
+// Anchors on docs.temporal.io for each Activity terminal event type.
+const EVENT_TYPE_DOCS_URL = {
+  ActivityTaskCompleted: "https://docs.temporal.io/references/events#activitytaskcompleted",
+  ActivityTaskFailed: "https://docs.temporal.io/references/events#activitytaskfailed",
+  ActivityTaskTimedOut: "https://docs.temporal.io/references/events#activitytasktimedout",
+};
+
 // Hard upper bound on bars rendered in either chart. Beyond this, individual
 // attempts get unreadably small; the simulation still tracks the actual count.
 const SLOT_CAP = 100;
@@ -642,7 +649,11 @@ export default function RetrySimulator() {
             {eventType && (
               <div className={styles.resultRow}>
                 <span className={styles.resultLabel}>Result</span>
-                <span className={styles.resultValue}>{eventType}</span>
+                <span className={styles.resultValue}>
+                  <a href={EVENT_TYPE_DOCS_URL[eventType]} target="_blank" rel="noopener noreferrer">
+                    {eventType}
+                  </a>
+                </span>
               </div>
             )}
             <div className={styles.resultRow}>
