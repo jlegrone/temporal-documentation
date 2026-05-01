@@ -314,15 +314,6 @@ export default function RetrySimulator() {
                 type="number"
               />
             </div>
-            <input
-              type="range"
-              value={state.scheduleTime.value}
-              onChange={(ev) => updateRetryPolicyParam("scheduleTime", ev)}
-              className={styles.slider}
-              min="0"
-              max={1000 / (state.scheduleTime.toMilliseconds() / state.scheduleTime.value || 1)}
-              step="0.005"
-            />
           </div>
           <div className="retries-list">
             {state.retries.map((retry, index) => {
@@ -380,6 +371,7 @@ export default function RetrySimulator() {
           <RetryPolicyParamInputs
             param="initialInterval"
             value={state.initialInterval}
+            min={1}
             max={10000}
             step={50}
             updateRetryPolicyParam={updateRetryPolicyParam}
@@ -598,11 +590,20 @@ function RetryPolicyParamInputs({
   const isDuration = value instanceof Duration;
   const inputValue = isDuration ? value.value : value;
   // Slider bounds are configured in ms for duration fields; scale them down
-  // to the chosen display unit so the slider tracks the input.
+  // to the chosen display unit so the slider tracks the input. Whole numbers
+  // only (regardless of unit) so the slider value the user reads off the UI
+  // matches whatever unit they selected without trailing decimals.
   const unitFactor = isDuration ? value.toMilliseconds() / value.value || 1 : 1;
   const scale = isDuration
     ? (msValue) => (msValue == null ? msValue : msValue / unitFactor)
     : (v) => v;
+  const sliderMin = isDuration
+    ? min
+      ? Math.max(1, Math.round(scale(min)))
+      : 0
+    : min || 0;
+  const sliderMax = isDuration ? Math.max(1, Math.round(scale(max))) : max || 100;
+  const sliderStep = isDuration ? Math.max(1, Math.round(scale(step))) : step || 1;
   return (
     <div className={styles.parameter}>
       <div className={styles.inputContainer}>
@@ -644,9 +645,9 @@ function RetryPolicyParamInputs({
         onChange={(ev) => updateRetryPolicyParam(param, ev)}
         type="range"
         className={styles.slider}
-        min={scale(min) || 0}
-        max={scale(max) || 100}
-        step={isDuration ? scale(step) || 0.001 : step || 1}
+        min={sliderMin}
+        max={sliderMax}
+        step={sliderStep}
       />
     </div>
   );
