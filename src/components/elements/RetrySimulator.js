@@ -112,6 +112,41 @@ function resultEventType(success, reason, lastAttemptOutcome) {
   return "ActivityTaskFailed";
 }
 
+// Whichever timeout/limit ended the retry chain — used to render the Details
+// row as a link to the relevant docs page. Returns null when there's nothing
+// useful to surface (success, never-terminates).
+function resultDetailsLink(success, reason, lastAttemptOutcome) {
+  if (success !== false) return null;
+  if (reason === "scheduleToCloseTimeout") {
+    return {
+      label: "scheduleToCloseTimeout reached",
+      href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#schedule-to-close-timeout",
+    };
+  }
+  if (reason === "scheduleTime") {
+    return {
+      label: "scheduleToStartTimeout reached",
+      href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#schedule-to-start-timeout",
+    };
+  }
+  if (reason === "maximumAttempts") {
+    // If the final attempt was killed by startToCloseTimeout, that is the
+    // proximate cause the user usually wants to read about — point at the
+    // timeout doc instead of the (also-true) maximumAttempts cap.
+    if (lastAttemptOutcome === "timedOut") {
+      return {
+        label: "startToCloseTimeout exceeded on every attempt",
+        href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#start-to-close-timeout",
+      };
+    }
+    return {
+      label: "maximumAttempts reached",
+      href: "https://docs.temporal.io/encyclopedia/retry-policies#maximum-attempts",
+    };
+  }
+  return null;
+}
+
 const languageSamples = new Map([]);
 languageSamples.set(
   "typescript",
@@ -376,6 +411,7 @@ export default function RetrySimulator() {
   const { success, runtimeMS, reason, attempts, lastAttemptOutcome } = calculateResult(state);
   const code = retryPolicyCode(state);
   const eventType = resultEventType(success, reason, lastAttemptOutcome);
+  const detailsLink = resultDetailsLink(success, reason, lastAttemptOutcome);
 
   useEffect(
     function initializeChart() {
@@ -652,6 +688,16 @@ export default function RetrySimulator() {
                 <span className={styles.resultValue}>
                   <a href={EVENT_TYPE_DOCS_URL[eventType]} target="_blank" rel="noopener noreferrer">
                     {eventType}
+                  </a>
+                </span>
+              </div>
+            )}
+            {detailsLink && (
+              <div className={styles.resultRow}>
+                <span className={styles.resultLabel}>Details</span>
+                <span className={styles.resultValue}>
+                  <a href={detailsLink.href} target="_blank" rel="noopener noreferrer">
+                    {detailsLink.label}
                   </a>
                 </span>
               </div>
