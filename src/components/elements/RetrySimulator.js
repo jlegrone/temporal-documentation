@@ -349,18 +349,18 @@ export default function RetrySimulator() {
             updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
           <RetryPolicyParamInputs
-            param="scheduleToStartTimeout"
-            value={state.scheduleToStartTimeout}
-            max={100000}
-            step={100}
-            updateRetryPolicyParam={updateRetryPolicyParam}
-            updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
-          />
-          <RetryPolicyParamInputs
             param="scheduleToCloseTimeout"
             value={state.scheduleToCloseTimeout}
             max={24 * 60 * 60 * 1000}
             step={60 * 1000}
+            updateRetryPolicyParam={updateRetryPolicyParam}
+            updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
+          />
+          <RetryPolicyParamInputs
+            param="scheduleToStartTimeout"
+            value={state.scheduleToStartTimeout}
+            max={100000}
+            step={100}
             updateRetryPolicyParam={updateRetryPolicyParam}
             updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
@@ -484,21 +484,21 @@ function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
 
 const PARAM_METADATA = {
   startToCloseTimeout: {
-    label: "Start-To-Close Timeout",
+    label: "Start-To-Close",
     description:
-      "Maximum time allowed for a single Activity Task Execution. Either this or Schedule-To-Close Timeout must be set.",
+      "Maximum time allowed for a single Activity Task Execution. Either this or Schedule-To-Close must be set.",
     href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#start-to-close-timeout",
     defaultDisplay: "∞",
   },
   scheduleToStartTimeout: {
-    label: "Schedule-To-Start Timeout",
+    label: "Schedule-To-Start",
     description:
       "Maximum time from when an Activity Task is scheduled to when a Worker picks it up.",
     href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#schedule-to-start-timeout",
     defaultDisplay: "∞",
   },
   scheduleToCloseTimeout: {
-    label: "Schedule-To-Close Timeout",
+    label: "Schedule-To-Close",
     description:
       "Maximum time for the overall Activity Execution, from first scheduling to last completion.",
     href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#schedule-to-close-timeout",
