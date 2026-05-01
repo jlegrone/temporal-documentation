@@ -22,6 +22,14 @@ const OUTCOME_COLORS = {
   notUsed: "#bbbbbb", // gray
 };
 
+// Maps simulator outcomes to the Workflow History event type a real Temporal
+// Server would record for that attempt's terminal state.
+const OUTCOME_EVENT_TYPE = {
+  succeeded: "ActivityTaskCompleted",
+  failed: "ActivityTaskFailed",
+  timedOut: "ActivityTaskTimedOut",
+};
+
 // Hard upper bound on bars rendered in either chart. Beyond this, individual
 // attempts get unreadably small; the simulation still tracks the actual count.
 const SLOT_CAP = 100;
@@ -301,6 +309,7 @@ export default function RetrySimulator() {
 
     const scheduleToCloseMS = state.scheduleToCloseTimeout.toMilliseconds();
     chart.$scheduleToCloseTimeoutMS = scheduleToCloseMS;
+    chart.$timeline = timeline;
 
     // Anchor the X-axis to at least 5× the first attempt's duration so a
     // single quick attempt doesn't render against a tiny zoomed-in axis. The
@@ -390,7 +399,10 @@ export default function RetrySimulator() {
                 title: (items) => `Attempt ${items[0].label}`,
                 label: (item) => {
                   const [start, end] = item.raw;
-                  return `${formatDurationHuman(start)} → ${formatDurationHuman(end)} (${formatDurationHuman(end - start)})`;
+                  const span = `${formatDurationHuman(start)} → ${formatDurationHuman(end)} (${formatDurationHuman(end - start)})`;
+                  const attempt = item.chart.$timeline?.[item.dataIndex];
+                  if (!attempt) return span;
+                  return [span, `Status: ${OUTCOME_EVENT_TYPE[attempt.outcome]}`];
                 },
               },
             },
