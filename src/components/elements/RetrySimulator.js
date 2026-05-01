@@ -192,15 +192,25 @@ export default function RetrySimulator() {
     const { backoffCoefficient } = state;
     const initialInterval = state.initialInterval.toMilliseconds();
     const maximumInterval = state.maximumInterval.toMilliseconds();
-    let { maximumAttempts } = state;
+    const { maximumAttempts } = state;
     const labels = [];
     const values = [];
-    maximumAttempts = maximumAttempts === 0 ? 10 : maximumAttempts;
-    const slots = Math.min(maximumAttempts, 30);
     // Run the simulation alongside the chart so each bar is colored by what
     // actually happened on that attempt (succeeded / failed / timed out) or
-    // grayed out for slots the activity never reached.
-    const { attemptOutcomes = [] } = calculateResult(state, { trackOutcomes: slots });
+    // grayed out for slots the activity never reached. Cap tracked outcomes
+    // at SLOT_CAP since the chart can't usefully render more bars than that.
+    const SLOT_CAP = 100;
+    const result = calculateResult(state, { trackOutcomes: SLOT_CAP });
+    const baseSlots = maximumAttempts === 0 ? 10 : Math.min(maximumAttempts, 30);
+    // When the activity terminates, grow the chart to cover every attempt that
+    // actually ran so the user can see the full retry sequence. For the
+    // never-terminates branch (result.success === null) we keep the baseline
+    // slot count — there's no meaningful "all attempts" to show.
+    const slots =
+      result.success !== null
+        ? Math.min(SLOT_CAP, Math.max(baseSlots, result.attempts))
+        : baseSlots;
+    const attemptOutcomes = result.attemptOutcomes || [];
     let interval = initialInterval;
     const colors = [];
     for (let i = 0; i < slots; ++i) {
