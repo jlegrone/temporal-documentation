@@ -329,6 +329,12 @@ export function calculateResult(state, options = {}) {
   //   2. The projection's per-iteration wall-clock cost is zero (zero per-attempt
   //      elapsed time AND zero retry interval growth potential), so totalRuntimeMS
   //      can never reach scheduleToCloseTimeout no matter how big the cap is.
+  // Hard iteration cap so a degenerate config (e.g. period=24h with zero
+  // per-iteration progress) can't lock up the page. Reaching this cap means
+  // the simulation hasn't converged in a reasonable bound; reporting
+  // neverTerminates is more honest than continuing.
+  const ITERATION_GUARD = 1_000_000;
+  let iterCap = ITERATION_GUARD;
   if (projectedRuntimeMS != null) {
     const projectedAttemptElapsed =
       startToCloseTimeout > 0
@@ -341,15 +347,16 @@ export function calculateResult(state, options = {}) {
       maximumAttempts === 0 &&
       (scheduleToCloseTimeout === 0 || noProgress)
     ) {
-      return withTimeline({ success: null, runtimeMS: 0, attempts: Infinity, reason: "neverTerminates" });
+      // Don't bail before populating the timeline — run just enough
+      // iterations to fill it so the chart still shows the projected
+      // attempts. The success/cap checks inside the loop are known not to
+      // fire here, so capping at trackLimit is safe and avoids spinning.
+      if (trackLimit === 0) {
+        return { success: null, runtimeMS: 0, attempts: Infinity, reason: "neverTerminates" };
+      }
+      iterCap = trackLimit;
     }
   }
-
-  // Hard iteration cap so a degenerate config (e.g. period=24h with zero
-  // per-iteration progress) can't lock up the page. Reaching this cap means
-  // the simulation hasn't converged in a reasonable bound; reporting
-  // neverTerminates is more honest than continuing.
-  const ITERATION_GUARD = 1_000_000;
 
   let retryIntervalMS = initialInterval;
   let totalRuntimeMS = 0;
@@ -362,7 +369,7 @@ export function calculateResult(state, options = {}) {
   let entryAttemptsUsed = 0;
   let entryElapsedMS = 0;
 
-  for (let i = 0; i < ITERATION_GUARD; ++i) {
+  for (let i = 0; i < iterCap; ++i) {
     let currentRetryRuntime;
     let isSuccess;
     if (entryIndex < entries.length) {

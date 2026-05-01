@@ -849,3 +849,27 @@ test("calculateResult: trackOutcomes caps attemptTimeline length", () => {
   assert.equal(result.attemptTimeline.length, 5);
   assert.equal(result.attempts, 50);
 });
+
+test("calculateResult: never-terminating chain still populates attemptTimeline up to trackOutcomes", () => {
+  // Classic infinite retry: failure-only chain, no maximumAttempts, no
+  // scheduleToCloseTimeout. The result is neverTerminates, but the timeline
+  // should still show the first N projected attempts so the chart isn't blank.
+  const state = {
+    ...DEFAULTS,
+    scheduleToCloseTimeout: new Duration(0, "s"),
+    initialInterval: new Duration(1, "s"),
+    backoffCoefficient: 2,
+    maximumAttempts: 0,
+    retries: [{ success: false, runtime: new Duration(100, "ms") }],
+  };
+  const result = calculateResult(state, { trackOutcomes: 10 });
+  assert.equal(result.success, null);
+  assert.equal(result.reason, "neverTerminates");
+  assert.equal(result.attempts, Infinity);
+  assert.equal(result.attemptTimeline.length, 10);
+  assert.ok(result.attemptTimeline.every((a) => a.outcome === "failed"));
+  // Without trackOutcomes the function still bails immediately with no timeline.
+  const bare = calculateResult(state);
+  assert.equal(bare.success, null);
+  assert.equal(bare.attemptTimeline, undefined);
+});
