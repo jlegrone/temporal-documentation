@@ -1006,9 +1006,9 @@ function retryPolicyCode(state) {
         .map((key) => `\t${capitalizeFirstLetter(key)}: ${formatGoValue(value[key])},`),
       "\tRetryPolicy: &temporal.RetryPolicy{",
       ...Object.keys(value.retryPolicy).map(
-        (key) => `\t\t${capitalizeFirstLetter(key)}: ${formatGoValue(value.retryPolicy[key])}`
+        (key) => `\t\t${capitalizeFirstLetter(key)}: ${formatGoValue(value.retryPolicy[key])},`
       ),
-      "\t}",
+      "\t},",
       "}",
     ].join("\n");
     return val;
