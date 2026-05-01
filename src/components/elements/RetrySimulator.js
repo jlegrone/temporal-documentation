@@ -14,6 +14,14 @@ import {
   formatDurationHuman,
 } from "./retry-simulator-state.mjs";
 
+// Per-attempt bar colors on the retry-interval chart.
+const OUTCOME_COLORS = {
+  succeeded: "#5cb85c", // green
+  failed: "#d9534f", // red
+  timedOut: "#f0ad4e", // orange
+  notUsed: "#bbbbbb", // gray
+};
+
 const languageSamples = new Map([]);
 languageSamples.set(
   "typescript",
@@ -124,12 +132,14 @@ export default function RetrySimulator() {
 
     if (values.scenario === "latency") {
       // Latency only "matters" when each attempt is killed by the per-attempt
-      // timeout, otherwise the first slow success ends the simulation. Set a
-      // tight startToCloseTimeout so the chain demonstrates retries.
+      // startToCloseTimeout — otherwise the first slow success ends the
+      // simulation immediately. We leave startToCloseTimeout alone here so
+      // the scenario doesn't surprise the user by overwriting their timeout
+      // config; configure one alongside this scenario to see the latency
+      // window drive retries.
       const period = new Duration(values.periodValue, values.periodUnit);
       setState({
         ...state,
-        startToCloseTimeout: new Duration(2, "s"),
         retries: [
           { success: true, runtime: new Duration(5, "s"), period },
           { success: true, runtime: new Duration(100, "ms") },
@@ -186,11 +196,18 @@ export default function RetrySimulator() {
     const labels = [];
     const values = [];
     maximumAttempts = maximumAttempts === 0 ? 10 : maximumAttempts;
+    const slots = Math.min(maximumAttempts, 30);
+    // Run the simulation alongside the chart so each bar is colored by what
+    // actually happened on that attempt (succeeded / failed / timed out) or
+    // grayed out for slots the activity never reached.
+    const { attemptOutcomes = [] } = calculateResult(state, { trackOutcomes: slots });
     let interval = initialInterval;
-    for (let i = 0; i < maximumAttempts; ++i) {
+    const colors = [];
+    for (let i = 0; i < slots; ++i) {
       interval = Math.min(interval, maximumInterval);
       labels.push(i + 1);
       values.push(interval);
+      colors.push(OUTCOME_COLORS[attemptOutcomes[i]] || OUTCOME_COLORS.notUsed);
       interval = interval * backoffCoefficient;
     }
 
@@ -202,9 +219,9 @@ export default function RetrySimulator() {
     chart.data.labels = labels;
     chart.data.datasets = [
       {
-        label: "Interval after activity failure in ms",
-        backgroundColor: "#84bdf5",
-        borderColor: "#84bdf5",
+        label: "Retry interval after each attempt (ms)",
+        backgroundColor: colors,
+        borderColor: colors,
         data: values,
       },
     ];

@@ -274,7 +274,14 @@ export function encodeStateToParams(state) {
   return params;
 }
 
-export function calculateResult(state) {
+/**
+ * @param state The simulator state.
+ * @param options.trackOutcomes If a positive integer, the result includes an
+ *   `attemptOutcomes` array of per-attempt classifications ("succeeded",
+ *   "failed", or "timedOut"), capped at this many entries. The chart uses
+ *   this to color each bar without having to re-run the simulation.
+ */
+export function calculateResult(state, options = {}) {
   const startToCloseTimeout = state.startToCloseTimeout.toMilliseconds();
   const scheduleToCloseTimeout = state.scheduleToCloseTimeout.toMilliseconds();
   const scheduleToStartTimeout = state.scheduleToStartTimeout.toMilliseconds();
@@ -282,18 +289,25 @@ export function calculateResult(state) {
   const initialInterval = state.initialInterval.toMilliseconds();
   const maximumInterval = state.maximumInterval.toMilliseconds();
   const { maximumAttempts, backoffCoefficient } = state;
+  const trackLimit =
+    typeof options.trackOutcomes === "number" && options.trackOutcomes > 0
+      ? options.trackOutcomes
+      : 0;
+  const outcomes = trackLimit > 0 ? [] : null;
+  const withOutcomes = (result) =>
+    outcomes ? { ...result, attemptOutcomes: outcomes } : result;
 
   if (scheduleToStartTimeout > 0 && scheduleTime >= scheduleToStartTimeout) {
-    return {
+    return withOutcomes({
       success: false,
       runtimeMS: scheduleToStartTimeout,
       attempts: 0,
       reason: "scheduleTime",
-    };
+    });
   }
 
   if (state.retries.length === 0) {
-    return { success: false, runtimeMS: 0, attempts: 0, reason: "No retries" };
+    return withOutcomes({ success: false, runtimeMS: 0, attempts: 0, reason: "No retries" });
   }
 
   // Pre-compute per-entry numeric snapshots so the hot loop does only arithmetic.
@@ -337,7 +351,7 @@ export function calculateResult(state) {
       maximumAttempts === 0 &&
       (scheduleToCloseTimeout === 0 || noProgress)
     ) {
-      return { success: null, runtimeMS: 0, attempts: Infinity, reason: "neverTerminates" };
+      return withOutcomes({ success: null, runtimeMS: 0, attempts: Infinity, reason: "neverTerminates" });
     }
   }
 
@@ -367,7 +381,12 @@ export function calculateResult(state) {
       isSuccess = entry.success;
     } else {
       if (projectedRuntimeMS == null) {
-        return { success: null, runtimeMS: totalRuntimeMS, attempts: Infinity, reason: "neverTerminates" };
+        return withOutcomes({
+          success: null,
+          runtimeMS: totalRuntimeMS,
+          attempts: Infinity,
+          reason: "neverTerminates",
+        });
       }
       currentRetryRuntime = projectedRuntimeMS;
       isSuccess = false;
@@ -379,25 +398,31 @@ export function calculateResult(state) {
     // of the user's intended outcome. The retry policy then decides whether
     // to schedule another Activity Task.
     let attemptElapsed = currentRetryRuntime;
+    let timedOut = false;
     if (startToCloseTimeout > 0 && currentRetryRuntime >= startToCloseTimeout) {
       attemptElapsed = startToCloseTimeout;
+      timedOut = true;
       isSuccess = false;
     }
     totalRuntimeMS += attemptElapsed;
     entryElapsedMS += attemptElapsed;
     entryAttemptsUsed += 1;
 
+    if (outcomes && outcomes.length < trackLimit) {
+      outcomes.push(timedOut ? "timedOut" : isSuccess ? "succeeded" : "failed");
+    }
+
     if (isSuccess) {
-      return { success: true, runtimeMS: totalRuntimeMS, attempts: i + 1 };
+      return withOutcomes({ success: true, runtimeMS: totalRuntimeMS, attempts: i + 1 });
     }
 
     if (maximumAttempts > 0 && i + 1 >= maximumAttempts) {
-      return {
+      return withOutcomes({
         success: false,
         runtimeMS: totalRuntimeMS,
         attempts: i + 1,
         reason: "maximumAttempts",
-      };
+      });
     }
 
     retryIntervalMS = Math.min(retryIntervalMS * backoffCoefficient, maximumInterval);
@@ -405,12 +430,12 @@ export function calculateResult(state) {
     entryElapsedMS += retryIntervalMS;
 
     if (scheduleToCloseTimeout > 0 && totalRuntimeMS >= scheduleToCloseTimeout) {
-      return {
+      return withOutcomes({
         success: false,
         runtimeMS: totalRuntimeMS,
         attempts: i + 1,
         reason: "scheduleToCloseTimeout",
-      };
+      });
     }
 
     // Advance to the next configured entry once the active one is exhausted.
@@ -424,7 +449,12 @@ export function calculateResult(state) {
     }
   }
   // Hit the iteration guard — the simulation isn't converging.
-  return { success: null, runtimeMS: totalRuntimeMS, attempts: Infinity, reason: "neverTerminates" };
+  return withOutcomes({
+    success: null,
+    runtimeMS: totalRuntimeMS,
+    attempts: Infinity,
+    reason: "neverTerminates",
+  });
 }
 
 export function decodeStateFromParams(search) {
