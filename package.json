@@ -24,6 +24,7 @@
     "sync:ai-cookbook": "node ./bin/sync-ai-cookbook.js",
     "swizzle": "docusaurus swizzle",
     "vale": "./assembly/run-vale.sh",
+    "test:unit": "node --test 'src/**/*.test.mjs'",
     "test:visual": "playwright test",
     "write-heading-ids": "docusaurus write-heading-ids",
     "write-translations": "docusaurus write-translations",
