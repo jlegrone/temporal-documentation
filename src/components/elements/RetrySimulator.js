@@ -128,7 +128,7 @@ export default function RetrySimulator() {
     const labels = [];
     const values = [];
     maximumAttempts = maximumAttempts === 0 ? 10 : maximumAttempts;
-    maximumInterval = maximumInterval === 0 ? Number.POSITIVE_INFINITY : maximumInterval;
+    maximumInterval = maximumInterval === 0 ? 100 * initialInterval : maximumInterval;
     let interval = initialInterval;
     for (let i = 0; i < maximumAttempts; ++i) {
       interval = Math.min(interval, maximumInterval);
@@ -441,10 +441,12 @@ function calculateResult(state) {
     scheduleToCloseTimeout,
     scheduleToStartTimeout,
     scheduleTime,
-    maximumInterval,
+    initialInterval,
     maximumAttempts,
     backoffCoefficient,
   } = state;
+  // When unset, the SDK default Maximum Interval is 100 × Initial Interval.
+  const maximumInterval = state.maximumInterval === 0 ? 100 * initialInterval : state.maximumInterval;
 
   if (scheduleToStartTimeout > 0 && scheduleTime >= scheduleToStartTimeout) {
     return {
@@ -486,10 +488,7 @@ function calculateResult(state) {
         };
       }
 
-      retryIntervalMS =
-        maximumInterval > 0
-          ? Math.min(retryIntervalMS * backoffCoefficient, maximumInterval)
-          : retryIntervalMS * backoffCoefficient;
+      retryIntervalMS = Math.min(retryIntervalMS * backoffCoefficient, maximumInterval);
 
       totalRuntimeMS += retryIntervalMS;
 
