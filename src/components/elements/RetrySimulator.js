@@ -30,11 +30,11 @@ const OUTCOME_EVENT_TYPE = {
   timedOut: "ActivityTaskTimedOut",
 };
 
-// Anchors on docs.temporal.io for each Activity terminal event type.
+// Doc anchors for each Activity terminal event type.
 const EVENT_TYPE_DOCS_URL = {
-  ActivityTaskCompleted: "https://docs.temporal.io/references/events#activitytaskcompleted",
-  ActivityTaskFailed: "https://docs.temporal.io/references/events#activitytaskfailed",
-  ActivityTaskTimedOut: "https://docs.temporal.io/references/events#activitytasktimedout",
+  ActivityTaskCompleted: "/references/events#activitytaskcompleted",
+  ActivityTaskFailed: "/references/events#activitytaskfailed",
+  ActivityTaskTimedOut: "/references/events#activitytasktimedout",
 };
 
 // Hard upper bound on bars rendered in either chart. Beyond this, individual
@@ -120,13 +120,13 @@ function resultDetailsLink(success, reason, lastAttemptOutcome) {
   if (reason === "scheduleToCloseTimeout") {
     return {
       label: "Exceeded Schedule-To-Close Timeout",
-      href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#schedule-to-close-timeout",
+      href: "/encyclopedia/detecting-activity-failures#schedule-to-close-timeout",
     };
   }
   if (reason === "scheduleTime") {
     return {
       label: "Exceeded Schedule-To-Start Timeout",
-      href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#schedule-to-start-timeout",
+      href: "/encyclopedia/detecting-activity-failures#schedule-to-start-timeout",
     };
   }
   if (reason === "maximumAttempts") {
@@ -136,12 +136,12 @@ function resultDetailsLink(success, reason, lastAttemptOutcome) {
     if (lastAttemptOutcome === "timedOut") {
       return {
         label: "Exceeded Start-To-Close Timeout",
-        href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#start-to-close-timeout",
+        href: "/encyclopedia/detecting-activity-failures#start-to-close-timeout",
       };
     }
     return {
       label: "Exceeded Maximum Attempts",
-      href: "https://docs.temporal.io/encyclopedia/retry-policies#maximum-attempts",
+      href: "/encyclopedia/retry-policies#maximum-attempts",
     };
   }
   return null;
@@ -857,46 +857,46 @@ const PARAM_METADATA = {
     label: "Start-To-Close",
     description:
       "Maximum time allowed for a single Activity Task Execution. Either this or Schedule-To-Close must be set.",
-    href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#start-to-close-timeout",
+    href: "/encyclopedia/detecting-activity-failures#start-to-close-timeout",
     defaultDisplay: "∞",
   },
   scheduleToStartTimeout: {
     label: "Schedule-To-Start",
     description:
       "Maximum time from when an Activity Task is scheduled to when a Worker picks it up.",
-    href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#schedule-to-start-timeout",
+    href: "/encyclopedia/detecting-activity-failures#schedule-to-start-timeout",
     defaultDisplay: "∞",
   },
   scheduleToCloseTimeout: {
     label: "Schedule-To-Close",
     description:
       "Maximum time for the overall Activity Execution, from first scheduling to last completion.",
-    href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#schedule-to-close-timeout",
+    href: "/encyclopedia/detecting-activity-failures#schedule-to-close-timeout",
     defaultDisplay: "∞",
   },
   backoffCoefficient: {
     label: "Backoff Coefficient",
     description: "Multiplier applied to each successive retry interval.",
-    href: "https://docs.temporal.io/encyclopedia/retry-policies#backoff-coefficient",
+    href: "/encyclopedia/retry-policies#backoff-coefficient",
     defaultDisplay: "2",
   },
   initialInterval: {
     label: "Initial Interval",
     description: "Amount of time that must elapse before the first retry occurs.",
-    href: "https://docs.temporal.io/encyclopedia/retry-policies#initial-interval",
+    href: "/encyclopedia/retry-policies#initial-interval",
     defaultDisplay: "1000 ms",
   },
   maximumAttempts: {
     label: "Maximum Attempts",
     description:
       "Maximum number of execution attempts that can be made in the presence of failures (0 means unlimited).",
-    href: "https://docs.temporal.io/encyclopedia/retry-policies#maximum-attempts",
+    href: "/encyclopedia/retry-policies#maximum-attempts",
     defaultDisplay: "∞",
   },
   maximumInterval: {
     label: "Maximum Interval",
     description: "Upper bound on the interval between retries.",
-    href: "https://docs.temporal.io/encyclopedia/retry-policies#maximum-interval",
+    href: "/encyclopedia/retry-policies#maximum-interval",
     defaultDisplay: "100 × Initial Interval",
   },
 };
