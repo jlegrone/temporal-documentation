@@ -9,8 +9,9 @@ import {
   UNIT_LABELS,
   UNIT_TO_GO,
   calculateResult,
-  encodeStateToParams,
   decodeStateFromParams,
+  encodeStateToParams,
+  formatDurationHuman,
 } from "./retry-simulator-state.mjs";
 
 const languageSamples = new Map([]);
@@ -402,7 +403,7 @@ export default function RetrySimulator() {
             <h3 className={styles.resultText}>
               {success === null
                 ? "Never terminates — unlimited attempts"
-                : `${success ? "Success" : "Failed"} after ${runtimeMS} ms (${attempts} ${
+                : `${success ? "Success" : "Failed"} after ${formatDurationHuman(runtimeMS)} (${attempts} ${
                     attempts === 1 ? "attempt" : "attempts"
                   })${success ? "" : ": " + reason}`}
             </h3>

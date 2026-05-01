@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import {
   Duration,
   calculateResult,
-  encodeStateToParams,
   decodeStateFromParams,
+  encodeStateToParams,
+  formatDurationHuman,
 } from "./retry-simulator-state.mjs";
 
 const DEFAULTS = decodeStateFromParams("");
@@ -384,6 +385,19 @@ test("Duration.parse accepts <count><unit> strings", () => {
   assert.equal(Duration.parse("invalid"), null);
   assert.equal(Duration.parse("100"), null);
   assert.equal(Duration.parse("100xyz"), null);
+});
+
+test("formatDurationHuman picks the largest natural unit", () => {
+  assert.equal(formatDurationHuman(0), "0ms");
+  assert.equal(formatDurationHuman(1), "1ms");
+  assert.equal(formatDurationHuman(999), "999ms");
+  assert.equal(formatDurationHuman(1000), "1s");
+  assert.equal(formatDurationHuman(1500), "1.5s");
+  assert.equal(formatDurationHuman(5100), "5.1s");
+  assert.equal(formatDurationHuman(60_000), "1m");
+  assert.equal(formatDurationHuman(90_000), "1.5m");
+  assert.equal(formatDurationHuman(3_600_000), "1h");
+  assert.equal(formatDurationHuman(86_400_000), "24h");
 });
 
 test("Duration.withUnit keeps the numeric value and changes the unit", () => {

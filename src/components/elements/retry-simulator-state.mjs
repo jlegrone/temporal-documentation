@@ -25,6 +25,19 @@ export const UNIT_LABELS = {
   h: "hour(s)",
 };
 
+/**
+ * Render a millisecond value with the largest natural unit (ms, s, m, h)
+ * and at most two fractional digits. e.g. 5100 → "5.1 s", 90000 → "1.5 m".
+ */
+export function formatDurationHuman(ms) {
+  if (!Number.isFinite(ms)) return String(ms);
+  const round = (n) => Math.round(n * 100) / 100;
+  if (Math.abs(ms) < 1000) return `${ms}ms`;
+  if (Math.abs(ms) < 60_000) return `${round(ms / 1000)}s`;
+  if (Math.abs(ms) < 3_600_000) return `${round(ms / 60_000)}m`;
+  return `${round(ms / 3_600_000)}h`;
+}
+
 const DEFAULT_DURATION_UNIT = "s";
 
 /**
