@@ -119,13 +119,13 @@ function resultDetailsLink(success, reason, lastAttemptOutcome) {
   if (success !== false) return null;
   if (reason === "scheduleToCloseTimeout") {
     return {
-      label: "scheduleToCloseTimeout reached",
+      label: "Activity did not complete within the Schedule-To-Close timeout",
       href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#schedule-to-close-timeout",
     };
   }
   if (reason === "scheduleTime") {
     return {
-      label: "scheduleToStartTimeout reached",
+      label: "No Worker picked up the Activity Task before the Schedule-To-Start timeout",
       href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#schedule-to-start-timeout",
     };
   }
@@ -135,12 +135,12 @@ function resultDetailsLink(success, reason, lastAttemptOutcome) {
     // timeout doc instead of the (also-true) maximumAttempts cap.
     if (lastAttemptOutcome === "timedOut") {
       return {
-        label: "startToCloseTimeout exceeded on every attempt",
+        label: "Every attempt exceeded the Start-To-Close timeout",
         href: "https://docs.temporal.io/encyclopedia/detecting-activity-failures#start-to-close-timeout",
       };
     }
     return {
-      label: "maximumAttempts reached",
+      label: "Reached the maximum number of retry attempts",
       href: "https://docs.temporal.io/encyclopedia/retry-policies#maximum-attempts",
     };
   }
