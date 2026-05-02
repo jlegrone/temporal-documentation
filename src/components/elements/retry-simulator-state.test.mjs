@@ -707,6 +707,27 @@ test("calculateResult: a single attempt that overshoots scheduleToCloseTimeout r
   assert.equal(result.reason, "scheduleToCloseTimeout");
 });
 
+test("calculateResult: an attempt that lands exactly on scheduleToCloseTimeout still records as timedOut", () => {
+  // Boundary case for the >= comparison on attemptStartMS + attemptElapsed.
+  // A 1s attempt against a 1s deadline ends at exactly the deadline — the
+  // Server still kills it at scheduleToCloseTimeout, so the bar must be
+  // labeled "timedOut", not allowed to complete normally.
+  const state = {
+    ...DEFAULTS,
+    scheduleToCloseTimeout: new Duration(1, "s"),
+    retries: [{ success: false, runtime: new Duration(1, "s") }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.attemptTimeline.length, 1);
+  assert.deepEqual(result.attemptTimeline[0], {
+    startMS: 0,
+    elapsedMS: 1000,
+    outcome: "timedOut",
+  });
+  assert.equal(result.reason, "scheduleToCloseTimeout");
+  assert.equal(result.runtimeMS, 1000);
+});
+
 test("calculateResult: a later attempt that overshoots scheduleToCloseTimeout truncates at the remaining budget", () => {
   // Same defect class as the first-attempt case, but with a non-zero
   // attemptStartMS so the cappedElapsed = scheduleToCloseTimeout - attemptStartMS
