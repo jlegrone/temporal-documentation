@@ -392,6 +392,32 @@ export function calculateResult(state) {
       isSuccess = false;
     }
     const attemptStartMS = totalRuntimeMS;
+
+    // scheduleToCloseTimeout caps the entire activity. If the in-flight
+    // attempt would push past the deadline, the Server kills it at the
+    // deadline regardless of whether it would otherwise have succeeded —
+    // record the truncated bar and end the chain as scheduleToCloseTimeout.
+    if (
+      scheduleToCloseTimeout > 0 &&
+      attemptStartMS + attemptElapsed >= scheduleToCloseTimeout
+    ) {
+      const cappedElapsed = scheduleToCloseTimeout - attemptStartMS;
+      if (timeline.length < ATTEMPT_TIMELINE_CAP) {
+        timeline.push({
+          startMS: attemptStartMS,
+          elapsedMS: cappedElapsed,
+          outcome: "timedOut",
+        });
+      }
+      return withTimeline({
+        success: false,
+        runtimeMS: scheduleToCloseTimeout,
+        attempts: i + 1,
+        reason: "scheduleToCloseTimeout",
+        lastAttemptOutcome: "timedOut",
+      });
+    }
+
     totalRuntimeMS += attemptElapsed;
     entryElapsedMS += attemptElapsed;
     entryAttemptsUsed += 1;
