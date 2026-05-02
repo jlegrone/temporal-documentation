@@ -83,7 +83,7 @@ const scheduleToCloseMarkerPlugin = {
     ctx.font = "11px sans-serif";
     ctx.textAlign = x > (xScale.left + xScale.right) / 2 ? "right" : "left";
     const labelX = x + (ctx.textAlign === "right" ? -4 : 4);
-    ctx.fillText("scheduleToCloseTimeout", labelX, top + 12);
+    ctx.fillText("Schedule-To-Close Timeout", labelX, top + 12);
     ctx.restore();
   },
 };
