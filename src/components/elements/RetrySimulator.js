@@ -23,12 +23,14 @@ const OUTCOME_COLORS = {
   notUsed: "#bbbbbb", // gray
 };
 
-// Maps simulator outcomes to the Workflow History event type a real Temporal
-// Server would record for that attempt's terminal state.
+// Maps simulator outcomes to the per-attempt status shown in tooltips.
+// Real outcomes use the Workflow History event type that Temporal would
+// record; the ghost slot ("notUsed") never ran so it gets "Not Executed".
 const OUTCOME_EVENT_TYPE = {
   succeeded: "ActivityTaskCompleted",
   failed: "ActivityTaskFailed",
   timedOut: "ActivityTaskTimedOut",
+  notUsed: "Not Executed",
 };
 
 // Doc anchors for each Activity terminal event type.
@@ -85,30 +87,52 @@ const limitMarkersPlugin = {
       ctx.fillText("Schedule-To-Close Timeout", labelX, top + 12);
     }
 
-    // maximumAttempts marker: horizontal line below the cap'th attempt slot.
-    // The y-axis is categorical (one tick per attempt), so we read the pixel
-    // for "max" directly and offset by half a slot to land at the boundary.
+    // maximumAttempts marker: a line at the boundary just past the cap'th
+    // attempt slot. The category axis is whichever axis carries the attempt
+    // labels (Y on the wall-clock timeline, X on the retry-interval chart),
+    // so we draw across the perpendicular axis from there.
     const max = chart.$maximumAttempts;
-    const yScale = chart.scales.y;
-    if (max > 0 && yScale) {
-      const labels = chart.data.labels || [];
-      // getPixelForValue uses the label index (0-based). The cap'th attempt
-      // sits at index max-1; bail if it would fall outside the visible slots.
-      if (max - 1 < labels.length) {
-        const slotPixel = yScale.getPixelForValue(max - 1);
-        const slotBelow = max < labels.length
-          ? yScale.getPixelForValue(max)
-          : bottom;
-        const y = (slotPixel + slotBelow) / 2;
-        ctx.beginPath();
-        ctx.setLineDash([6, 4]);
-        ctx.moveTo(left, y);
-        ctx.lineTo(right, y);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.textAlign = "left";
-        ctx.fillText("Maximum Attempts", left + 4, y - 4);
+    const labels = chart.data.labels || [];
+    if (max > 0 && max - 1 < labels.length) {
+      const onY = chart.options.indexAxis === "y";
+      const catScale = onY ? chart.scales.y : chart.scales.x;
+      const slotPixel = catScale.getPixelForValue(max - 1);
+      const slotBelow = max < labels.length
+        ? catScale.getPixelForValue(max)
+        : (onY ? bottom : right);
+      const pos = (slotPixel + slotBelow) / 2;
+      ctx.beginPath();
+      ctx.setLineDash([6, 4]);
+      if (onY) {
+        ctx.moveTo(left, pos);
+        ctx.lineTo(right, pos);
+      } else {
+        ctx.moveTo(pos, top);
+        ctx.lineTo(pos, bottom);
       }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Place the label adjacent to the line. On the timeline (Y-axis)
+      // the line spans the chart horizontally, so the label sits at its
+      // left edge. On the retry-interval chart (X-axis) the line is
+      // vertical; flip the text to the line's left when it would
+      // otherwise overflow the right edge of the chart.
+      let labelX, labelY;
+      if (onY) {
+        ctx.textAlign = "left";
+        labelX = left + 4;
+        labelY = pos - 4;
+      } else {
+        ctx.textAlign = pos > (left + right) / 2 ? "right" : "left";
+        labelX = pos + (ctx.textAlign === "right" ? -4 : 4);
+        labelY = top + 12;
+      }
+      // White stroke so the red label stays readable when it lands on top
+      // of a same-color bar (e.g. the tall bar at the cap'th attempt).
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "#fff";
+      ctx.strokeText("Maximum Attempts", labelX, labelY);
+      ctx.fillText("Maximum Attempts", labelX, labelY);
     }
     ctx.restore();
   },
@@ -236,7 +260,7 @@ function updateChart(chart, state, result) {
   // slot count — there's no meaningful "all attempts" to show.
   const slots =
     result.success !== null
-      ? Math.min(SLOT_CAP, Math.max(baseSlots, result.attempts))
+      ? Math.min(SLOT_CAP, Math.max(baseSlots, result.attemptTimeline.length))
       : baseSlots;
   let interval = initialInterval;
   const colors = [];
@@ -248,6 +272,7 @@ function updateChart(chart, state, result) {
     interval = interval * backoffCoefficient;
   }
 
+  chart.$maximumAttempts = maximumAttempts;
   chart.data.labels = labels;
   chart.data.datasets = [
     {
@@ -423,6 +448,7 @@ export default function RetrySimulator() {
   useEffect(function initializeChart() {
     const chart = new Chart(chartCanvas.current, {
       type: "bar",
+      plugins: [limitMarkersPlugin],
       options: {
         responsive: true,
         scales: {
