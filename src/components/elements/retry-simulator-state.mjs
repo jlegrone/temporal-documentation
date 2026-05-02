@@ -506,6 +506,41 @@ export function calculateResult(state) {
   });
 }
 
+/**
+ * Worst-case attempt count assuming every attempt is killed by
+ * startToCloseTimeout (e.g. the worker crashes mid-attempt every time).
+ * Returns Infinity when there's no per-attempt cap or the chain is
+ * otherwise unbounded.
+ */
+export function crashLoopAttempts(state) {
+  if (state.startToCloseTimeout.toMilliseconds() <= 0) {
+    // Without a per-attempt cap, a crashed Worker never releases the in-flight
+    // attempt — a single attempt consumes the entire scheduleToCloseTimeout
+    // window. With neither timeout set, the worst case is unbounded.
+    return state.scheduleToCloseTimeout.toMilliseconds() > 0 ? 1 : Infinity;
+  }
+  const result = calculateResult({
+    ...state,
+    retries: [{ success: false, runtime: state.startToCloseTimeout }],
+  });
+  return result.success === null ? Infinity : result.attempts;
+}
+
+/**
+ * Worst-case wall-clock time to exhaust maximumAttempts assuming every
+ * attempt reports a retryable error instantly (zero elapsed per attempt).
+ * Returns Infinity when maximumAttempts is unlimited.
+ */
+export function zeroDelayExhaustionMS(state) {
+  if (state.maximumAttempts <= 0) return Infinity;
+  const result = calculateResult({
+    ...state,
+    scheduleToCloseTimeout: new Duration(0, "s"),
+    retries: [{ success: false, runtime: new Duration(0, "ms") }],
+  });
+  return result.success === null ? Infinity : result.runtimeMS;
+}
+
 export function decodeStateFromParams(search) {
   const params = new URLSearchParams(search);
   const out = { ...DEFAULT_STATE };

@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import {
   Duration,
   calculateResult,
+  crashLoopAttempts,
   decodeStateFromParams,
   encodeStateToParams,
   formatDurationHuman,
   formatDurationLong,
+  zeroDelayExhaustionMS,
 } from "./retry-simulator-state.mjs";
 
 const DEFAULTS = decodeStateFromParams("");
@@ -942,4 +944,98 @@ test("never-terminating chain still populates attemptTimeline", () => {
   assert.equal(result.attempts, Infinity);
   assert.equal(result.attemptTimeline.length, 100);
   assert.ok(result.attemptTimeline.every((a) => a.outcome === "failed"));
+});
+
+test("crashLoopAttempts: returns 1 when no startToCloseTimeout but a scheduleToCloseTimeout is set", () => {
+  // DEFAULTS has scheduleToCloseTimeout=24h with no startToCloseTimeout — a
+  // crashed Worker never releases the in-flight attempt, so a single attempt
+  // consumes the whole 24h window.
+  assert.equal(crashLoopAttempts(DEFAULTS), 1);
+});
+
+test("crashLoopAttempts: returns Infinity when neither timeout is set", () => {
+  const state = {
+    ...DEFAULTS,
+    startToCloseTimeout: new Duration(0, "s"),
+    scheduleToCloseTimeout: new Duration(0, "s"),
+  };
+  assert.equal(crashLoopAttempts(state), Infinity);
+});
+
+test("crashLoopAttempts: returns Infinity when no scheduleToCloseTimeout caps the chain", () => {
+  // STC set, but no STT and unlimited maxAttempts → calculateResult bails as
+  // never-terminates and the worst case is unbounded.
+  const state = {
+    ...DEFAULTS,
+    startToCloseTimeout: new Duration(1, "s"),
+    scheduleToCloseTimeout: new Duration(0, "s"),
+    maximumAttempts: 0,
+  };
+  assert.equal(crashLoopAttempts(state), Infinity);
+});
+
+test("crashLoopAttempts: counts attempts that fit inside scheduleToCloseTimeout", () => {
+  // Each attempt: 1s STC. Initial interval 1s, backoff 1, maximumInterval 1s
+  // → cycle length 2s. STT=10s → 5 cycles fit. Attempt 6 starts at 10s
+  // and the post-attempt check ends the chain at scheduleToCloseTimeout.
+  const state = {
+    ...DEFAULTS,
+    startToCloseTimeout: new Duration(1, "s"),
+    scheduleToCloseTimeout: new Duration(10, "s"),
+    initialInterval: new Duration(1, "s"),
+    backoffCoefficient: 1,
+    maximumInterval: new Duration(1, "s"),
+    maximumAttempts: 0,
+  };
+  assert.equal(crashLoopAttempts(state), 5);
+});
+
+test("crashLoopAttempts: returns the smaller of maxAttempts and the STT-bound count", () => {
+  // STT alone would allow 5 cycles (see test above), but maxAttempts caps at 3.
+  const state = {
+    ...DEFAULTS,
+    startToCloseTimeout: new Duration(1, "s"),
+    scheduleToCloseTimeout: new Duration(10, "s"),
+    initialInterval: new Duration(1, "s"),
+    backoffCoefficient: 1,
+    maximumInterval: new Duration(1, "s"),
+    maximumAttempts: 3,
+  };
+  assert.equal(crashLoopAttempts(state), 3);
+});
+
+test("zeroDelayExhaustionMS: returns Infinity when maximumAttempts is unlimited", () => {
+  assert.equal(zeroDelayExhaustionMS(DEFAULTS), Infinity);
+});
+
+test("zeroDelayExhaustionMS: returns 0 when maximumAttempts is 1 (no retry intervals)", () => {
+  const state = { ...DEFAULTS, maximumAttempts: 1 };
+  assert.equal(zeroDelayExhaustionMS(state), 0);
+});
+
+test("zeroDelayExhaustionMS: sums backoff intervals, capped at maximumInterval", () => {
+  // 5 attempts with initialInterval=1s, backoff=2, maximumInterval=4s.
+  // The simulator's first interval is initial * backoff (= 2s), so intervals
+  // for attempts 2..5 are: 2s, 4s, 4s, 4s — total 14s.
+  const state = {
+    ...DEFAULTS,
+    initialInterval: new Duration(1, "s"),
+    backoffCoefficient: 2,
+    maximumInterval: new Duration(4, "s"),
+    maximumAttempts: 5,
+    scheduleToCloseTimeout: new Duration(24, "h"),
+  };
+  assert.equal(zeroDelayExhaustionMS(state), 14000);
+});
+
+test("zeroDelayExhaustionMS: returns Infinity once maximumAttempts exceeds the iteration guard", () => {
+  const state = {
+    ...DEFAULTS,
+    initialInterval: new Duration(1, "ms"),
+    backoffCoefficient: 1,
+    maximumInterval: new Duration(1, "ms"),
+    maximumAttempts: 5000,
+    scheduleToCloseTimeout: new Duration(24, "h"),
+  };
+  assert.equal(zeroDelayExhaustionMS(state), Infinity);
 });

@@ -9,10 +9,12 @@ import {
   UNIT_LABELS,
   UNIT_TO_GO,
   calculateResult,
+  crashLoopAttempts,
   decodeStateFromParams,
   encodeStateToParams,
   formatDurationHuman,
   formatDurationLong,
+  zeroDelayExhaustionMS,
 } from "./retry-simulator-state.mjs";
 
 // Per-attempt bar colors on the retry-interval chart.
@@ -483,6 +485,8 @@ export default function RetrySimulator() {
   const code = retryPolicyCode(state);
   const eventType = resultEventType(success, reason, lastAttemptOutcome);
   const detailsLink = resultDetailsLink(success, reason, lastAttemptOutcome);
+  const crashAttempts = crashLoopAttempts(state);
+  const exhaustMS = zeroDelayExhaustionMS(state);
 
   useEffect(function initializeChart() {
     const chart = new Chart(chartCanvas.current, {
@@ -808,6 +812,33 @@ export default function RetrySimulator() {
       <div className={styles.timelineSection}>
         <h3>Attempt Timeline</h3>
         <canvas ref={timelineCanvas}></canvas>
+      </div>
+      <div className={styles.worstCaseSection}>
+        <h3>Worst-Case Analysis</h3>
+        <div className={styles.worstCaseRow}>
+          <div className={styles.worstCaseValue}>
+            {crashAttempts === Infinity ? "∞" : crashAttempts}
+          </div>
+          <div className={styles.worstCaseDescription}>
+            <strong>Crash-loop attempts.</strong>{" "}
+            Maximum number of attempts that can run before{" "}
+            <a href="/encyclopedia/detecting-activity-failures#schedule-to-close-timeout" target="_blank" rel="noopener noreferrer">Schedule-To-Close Timeout</a>{" "}
+            fires when every attempt is killed by{" "}
+            <a href="/encyclopedia/detecting-activity-failures#start-to-close-timeout" target="_blank" rel="noopener noreferrer">Start-To-Close Timeout</a>
+            {" "}— for example, when the Worker crashes mid-attempt every retry and never reports a result. Set both timeouts to bound this number.
+          </div>
+        </div>
+        <div className={styles.worstCaseRow}>
+          <div className={styles.worstCaseValue}>
+            {exhaustMS === Infinity ? "∞" : formatDurationLong(exhaustMS)}
+          </div>
+          <div className={styles.worstCaseDescription}>
+            <strong>Time to exhaust retries.</strong>{" "}
+            How long the chain runs if every attempt reports a retryable error instantly, accumulating only the configured retry intervals between attempts. This is the floor on how quickly the policy will give up — set{" "}
+            <a href="/encyclopedia/retry-policies#maximum-attempts" target="_blank" rel="noopener noreferrer">Maximum Attempts</a>{" "}
+            to bound it.
+          </div>
+        </div>
       </div>
     </div>
   );
