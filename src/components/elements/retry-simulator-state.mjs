@@ -434,10 +434,13 @@ export function calculateResult(state) {
     // Push a "ghost" attempt before terminating returns so the chart shows
     // where the next attempt would have been if the limiting condition (the
     // success, the maximumAttempts cap, or scheduleToCloseTimeout) hadn't
-    // fired. The ghost mirrors the last attempt's elapsed time.
+    // fired. The ghost takes the startToCloseTimeout window when one is
+    // configured (matching the natural ceiling on any future attempt) and
+    // otherwise mirrors the last attempt's elapsed time.
+    const ghostElapsed = startToCloseTimeout > 0 ? startToCloseTimeout : attemptElapsed;
     const pushGhost = (startMS) => {
       if (timeline.length < ATTEMPT_TIMELINE_CAP) {
-        timeline.push({ startMS, elapsedMS: attemptElapsed, outcome: "notUsed" });
+        timeline.push({ startMS, elapsedMS: ghostElapsed, outcome: "notUsed" });
       }
     };
     const nextStartMS = () =>
