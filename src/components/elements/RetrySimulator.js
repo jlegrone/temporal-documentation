@@ -54,36 +54,62 @@ function withRetryKeys(retries) {
   return retries.map(withRetryKey);
 }
 
-// Chart.js plugin: draws a vertical red line at scheduleToCloseTimeout on the
-// timeline chart. The chart instance carries the current timeout in
-// `chart.$scheduleToCloseTimeoutMS` (set by updateTimeline) — this lives on the
-// chart rather than module state so it survives across renders without forcing
-// the plugin into a React closure.
-const scheduleToCloseMarkerPlugin = {
-  id: "scheduleToCloseMarker",
+// Chart.js plugin: draws dashed red markers on the timeline chart for the
+// terminating limits — scheduleToCloseTimeout on the X-axis and
+// maximumAttempts on the Y-axis. The chart instance carries the current
+// limit values in $scheduleToCloseTimeoutMS / $maximumAttempts (set by
+// updateTimeline) so the plugin doesn't have to close over React state.
+const limitMarkersPlugin = {
+  id: "limitMarkers",
   afterDraw(chart) {
-    const timeoutMS = chart.$scheduleToCloseTimeoutMS;
-    if (!(timeoutMS > 0)) return;
-    const xScale = chart.scales.x;
-    if (!xScale) return;
-    if (timeoutMS < xScale.min || timeoutMS > xScale.max) return;
-    const x = xScale.getPixelForValue(timeoutMS);
-    const { top, bottom } = chart.chartArea;
     const ctx = chart.ctx;
+    const { top, bottom, left, right } = chart.chartArea;
     ctx.save();
-    ctx.beginPath();
     ctx.strokeStyle = "#d9534f";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
-    ctx.moveTo(x, top);
-    ctx.lineTo(x, bottom);
-    ctx.stroke();
-    ctx.setLineDash([]);
     ctx.fillStyle = "#d9534f";
+    ctx.lineWidth = 2;
     ctx.font = "11px sans-serif";
-    ctx.textAlign = x > (xScale.left + xScale.right) / 2 ? "right" : "left";
-    const labelX = x + (ctx.textAlign === "right" ? -4 : 4);
-    ctx.fillText("Schedule-To-Close Timeout", labelX, top + 12);
+
+    const timeoutMS = chart.$scheduleToCloseTimeoutMS;
+    const xScale = chart.scales.x;
+    if (timeoutMS > 0 && xScale && timeoutMS >= xScale.min && timeoutMS <= xScale.max) {
+      const x = xScale.getPixelForValue(timeoutMS);
+      ctx.beginPath();
+      ctx.setLineDash([6, 4]);
+      ctx.moveTo(x, top);
+      ctx.lineTo(x, bottom);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.textAlign = x > (xScale.left + xScale.right) / 2 ? "right" : "left";
+      const labelX = x + (ctx.textAlign === "right" ? -4 : 4);
+      ctx.fillText("Schedule-To-Close Timeout", labelX, top + 12);
+    }
+
+    // maximumAttempts marker: horizontal line below the cap'th attempt slot.
+    // The y-axis is categorical (one tick per attempt), so we read the pixel
+    // for "max" directly and offset by half a slot to land at the boundary.
+    const max = chart.$maximumAttempts;
+    const yScale = chart.scales.y;
+    if (max > 0 && yScale) {
+      const labels = chart.data.labels || [];
+      // getPixelForValue uses the label index (0-based). The cap'th attempt
+      // sits at index max-1; bail if it would fall outside the visible slots.
+      if (max - 1 < labels.length) {
+        const slotPixel = yScale.getPixelForValue(max - 1);
+        const slotBelow = max < labels.length
+          ? yScale.getPixelForValue(max)
+          : bottom;
+        const y = (slotPixel + slotBelow) / 2;
+        ctx.beginPath();
+        ctx.setLineDash([6, 4]);
+        ctx.moveTo(left, y);
+        ctx.lineTo(right, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.textAlign = "left";
+        ctx.fillText("Maximum Attempts", left + 4, y - 4);
+      }
+    }
     ctx.restore();
   },
 };
@@ -243,6 +269,7 @@ function updateTimeline(chart, state, result) {
   const colors = timeline.map((a) => OUTCOME_COLORS[a.outcome] || OUTCOME_COLORS.notUsed);
 
   chart.$scheduleToCloseTimeoutMS = state.scheduleToCloseTimeout.toMilliseconds();
+  chart.$maximumAttempts = state.maximumAttempts;
   chart.$timeline = timeline;
 
   // Pad the X-axis 10% past the reported runtime so the rightmost bar (and
@@ -414,7 +441,7 @@ export default function RetrySimulator() {
   useEffect(function initializeTimelineChart() {
     const chart = new Chart(timelineCanvas.current, {
       type: "bar",
-      plugins: [scheduleToCloseMarkerPlugin],
+      plugins: [limitMarkersPlugin],
       options: {
         responsive: true,
         indexAxis: "y",
