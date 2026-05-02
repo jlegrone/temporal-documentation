@@ -134,6 +134,7 @@ const limitMarkersPlugin = {
       ctx.strokeText("Maximum Attempts", labelX, labelY);
       ctx.fillText("Maximum Attempts", labelX, labelY);
     }
+
     ctx.restore();
   },
 };
@@ -293,15 +294,33 @@ function updateTimeline(chart, state, result) {
   const data = timeline.map((a) => [a.startMS, a.startMS + a.elapsedMS]);
   const colors = timeline.map((a) => OUTCOME_COLORS[a.outcome] || OUTCOME_COLORS.notUsed);
 
+  const sctMS = state.startToCloseTimeout.toMilliseconds();
   chart.$scheduleToCloseTimeoutMS = state.scheduleToCloseTimeout.toMilliseconds();
+  chart.$startToCloseTimeoutMS = sctMS;
   chart.$maximumAttempts = state.maximumAttempts;
   chart.$timeline = timeline;
 
-  // Pad the X-axis 10% past the reported runtime so the rightmost bar (and
-  // the scheduleToCloseTimeout marker, when it fired) sits inside the frame
-  // instead of pressed against the edge.
+  // Pad the X-axis 10% past the reported runtime so the rightmost bar sits
+  // inside the frame instead of pressed against the edge. When SCT is set,
+  // also extend past the last attempt's full SCT budget so its grey
+  // headroom-tail stays visible.
+  const lastEntry = timeline[timeline.length - 1];
+  const naturalEnd = lastEntry
+    ? lastEntry.startMS + Math.max(lastEntry.elapsedMS, sctMS)
+    : 0;
   chart.options.scales.x.suggestedMin = 0;
-  chart.options.scales.x.suggestedMax = result.runtimeMS * 1.1;
+  chart.options.scales.x.suggestedMax = Math.max(result.runtimeMS, naturalEnd) * 1.1;
+
+  // Second dataset: the unused remainder of each attempt's Start-To-Close
+  // budget, rendered as a translucent grey tail right after the actual bar.
+  // Set to null for rows that don't apply (no SCT, the next-attempt ghost,
+  // or a timed-out attempt that already saturated the budget) so Chart.js
+  // skips them but keeps the indices aligned with the actual dataset.
+  const sctTailColor = "rgba(187, 187, 187, 0.4)";
+  const sctTailData = timeline.map((a) => {
+    if (sctMS <= 0 || a.outcome === "notUsed" || a.elapsedMS >= sctMS) return null;
+    return [a.startMS + a.elapsedMS, a.startMS + sctMS];
+  });
 
   chart.data.labels = labels;
   chart.data.datasets = [
@@ -313,6 +332,21 @@ function updateTimeline(chart, state, result) {
       borderWidth: 1,
       // Make zero-elapsed-time attempts visible.
       minBarLength: 4,
+      // Cap each row's vertical thickness so timelines with few attempts
+      // don't render absurdly tall bars; rows still shrink when many
+      // attempts compete for the available vertical space.
+      maxBarThickness: 72,
+    },
+    {
+      label: "Remaining Start-To-Close budget",
+      backgroundColor: sctTailColor,
+      borderColor: sctTailColor,
+      data: sctTailData,
+      borderWidth: 0,
+      maxBarThickness: 72,
+      // Render in the same Y-axis row as the actual bar instead of stacking
+      // them in adjacent sub-bands.
+      grouped: false,
     },
   ];
   chart.update();
@@ -495,6 +529,17 @@ export default function RetrySimulator() {
                 const [start, end] = item.raw;
                 const span = `${formatDurationHuman(start)} → ${formatDurationHuman(end)} (${formatDurationHuman(end - start)})`;
                 const attempt = item.chart.$timeline?.[item.dataIndex];
+                // Tail dataset: show how much of the SCT budget went unused.
+                if (item.datasetIndex === 1) {
+                  const sct = item.chart.$startToCloseTimeoutMS;
+                  if (!attempt || !(sct > 0)) return span;
+                  const remaining = sct - attempt.elapsedMS;
+                  const pct = Math.round((remaining / sct) * 100);
+                  return [
+                    `${pct}% Start-To-Close budget remaining`,
+                    `${formatDurationHuman(remaining)} of ${formatDurationHuman(sct)}`,
+                  ];
+                }
                 if (!attempt) return span;
                 return [span, `Status: ${OUTCOME_EVENT_TYPE[attempt.outcome]}`];
               },
