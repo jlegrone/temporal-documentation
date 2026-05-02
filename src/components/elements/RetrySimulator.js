@@ -837,7 +837,6 @@ function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
       <div className={styles.inputContainer}>
         <select
           className={styles.numberInputLabel}
-          disabled={index + 1 < numRetries}
           value={retry.success ? "succeeds" : "fails"}
           onChange={(ev) => updateRetry(index, { success: ev.target.value === "succeeds" })}
         >
