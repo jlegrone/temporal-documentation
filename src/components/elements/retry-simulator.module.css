@@ -18,8 +18,8 @@
   border: 0;
   padding-top: 0px !important;
   vertical-align: top;
-  flex-grow: 1;
-  width: 50%;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .retryCol:first-of-type {
@@ -248,8 +248,7 @@
 }
 
 .worstCaseValue {
-  flex: 0 0 auto;
-  min-width: 7em;
+  flex: 0 0 12em;
   font-size: 1.5em;
   font-weight: 600;
   font-variant-numeric: tabular-nums;

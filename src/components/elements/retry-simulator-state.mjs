@@ -542,10 +542,11 @@ export function crashLoopAttempts(state) {
  * Returns Infinity when maximumAttempts is unlimited.
  */
 export function zeroDelayExhaustionMS(state) {
-  if (state.maximumAttempts <= 0) return Infinity;
+  if (state.maximumAttempts <= 0 && state.scheduleToCloseTimeout.toMilliseconds() <= 0) {
+    return Infinity;
+  }
   const result = calculateResult({
     ...state,
-    scheduleToCloseTimeout: new Duration(0, "s"),
     retries: [{ success: false, runtime: new Duration(0, "ms") }],
   });
   return result.success === null ? Infinity : result.runtimeMS;

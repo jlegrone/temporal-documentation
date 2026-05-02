@@ -1025,8 +1025,28 @@ test("crashLoopAttempts: returns the smaller of maxAttempts and the STT-bound co
   assert.equal(crashLoopAttempts(state), 3);
 });
 
-test("zeroDelayExhaustionMS: returns Infinity when maximumAttempts is unlimited", () => {
-  assert.equal(zeroDelayExhaustionMS(DEFAULTS), Infinity);
+test("zeroDelayExhaustionMS: returns Infinity when neither maximumAttempts nor scheduleToCloseTimeout bounds the chain", () => {
+  const state = {
+    ...DEFAULTS,
+    maximumAttempts: 0,
+    scheduleToCloseTimeout: new Duration(0, "s"),
+  };
+  assert.equal(zeroDelayExhaustionMS(state), Infinity);
+});
+
+test("zeroDelayExhaustionMS: bounded by scheduleToCloseTimeout when maximumAttempts is unlimited", () => {
+  // Initial interval 10s, backoff 1, max interval 10s, SCT 1m.
+  // With 0ms attempt runtime, the chain ends when the cumulative wait
+  // would exceed SCT — 10s × 6 = 60s.
+  const state = {
+    ...DEFAULTS,
+    maximumAttempts: 0,
+    initialInterval: new Duration(10, "s"),
+    backoffCoefficient: 1,
+    maximumInterval: new Duration(10, "s"),
+    scheduleToCloseTimeout: new Duration(1, "m"),
+  };
+  assert.equal(zeroDelayExhaustionMS(state), 60_000);
 });
 
 test("zeroDelayExhaustionMS: returns 0 when maximumAttempts is 1 (no retry intervals)", () => {
