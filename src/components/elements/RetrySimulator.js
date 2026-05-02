@@ -245,12 +245,11 @@ function updateTimeline(chart, state, result) {
   chart.$scheduleToCloseTimeoutMS = state.scheduleToCloseTimeout.toMilliseconds();
   chart.$timeline = timeline;
 
-  // Anchor the X-axis to at least 5× the first attempt's duration so a
-  // single quick attempt doesn't render against a tiny zoomed-in axis. The
-  // existing data-driven max takes over once attempts run past this floor.
-  const firstAttemptElapsed = timeline[0]?.elapsedMS ?? 0;
+  // Pad the X-axis 10% past the reported runtime so the rightmost bar (and
+  // the scheduleToCloseTimeout marker, when it fired) sits inside the frame
+  // instead of pressed against the edge.
   chart.options.scales.x.suggestedMin = 0;
-  chart.options.scales.x.suggestedMax = firstAttemptElapsed * 5;
+  chart.options.scales.x.suggestedMax = result.runtimeMS * 1.1;
 
   chart.data.labels = labels;
   chart.data.datasets = [
