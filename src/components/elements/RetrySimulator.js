@@ -200,7 +200,7 @@ function resultDetailsLink(success, reason, lastAttemptOutcome) {
       };
     }
     return {
-      label: "Exceeded Maximum Attempts",
+      label: "Exhausted Maximum Attempts",
       href: "/encyclopedia/retry-policies#maximum-attempts",
     };
   }
@@ -277,7 +277,7 @@ function updateChart(chart, state, result) {
   chart.data.labels = labels;
   chart.data.datasets = [
     {
-      label: "Retry interval after each attempt (ms)",
+      label: "Next retry interval after each attempt",
       backgroundColor: colors,
       borderColor: colors,
       data: values,
@@ -291,8 +291,14 @@ function updateTimeline(chart, state, result) {
   const labels = timeline.map((_, i) => i + 1);
   // Floating bars: each data point is [start, end] in ms. Chart.js renders
   // them as horizontal spans on the wall-clock X-axis when indexAxis is "y".
+  const sctTailColor = "rgba(187, 187, 187, 0.4)";
   const data = timeline.map((a) => [a.startMS, a.startMS + a.elapsedMS]);
-  const colors = timeline.map((a) => OUTCOME_COLORS[a.outcome] || OUTCOME_COLORS.notUsed);
+  // Ghost rows (outcome === "notUsed") share the SCT tail's translucent grey
+  // so the "next attempt would have been here" hint reads as a continuation
+  // of the budget-remaining visual rather than as a real bar.
+  const colors = timeline.map((a) =>
+    a.outcome === "notUsed" ? sctTailColor : OUTCOME_COLORS[a.outcome] || OUTCOME_COLORS.notUsed
+  );
 
   const sctMS = state.startToCloseTimeout.toMilliseconds();
   chart.$scheduleToCloseTimeoutMS = state.scheduleToCloseTimeout.toMilliseconds();
@@ -316,7 +322,6 @@ function updateTimeline(chart, state, result) {
   // Set to null for rows that don't apply (no SCT, the next-attempt ghost,
   // or a timed-out attempt that already saturated the budget) so Chart.js
   // skips them but keeps the indices aligned with the actual dataset.
-  const sctTailColor = "rgba(187, 187, 187, 0.4)";
   const sctTailData = timeline.map((a) => {
     if (sctMS <= 0 || a.outcome === "notUsed" || a.elapsedMS >= sctMS) return null;
     return [a.startMS + a.elapsedMS, a.startMS + sctMS];
@@ -486,8 +491,22 @@ export default function RetrySimulator() {
       options: {
         responsive: true,
         scales: {
-          y: { grid: { color: "#ddd" } },
-          x: { grid: { color: "#ddd" } },
+          y: {
+            title: { display: true, text: "Next Retry Interval" },
+            grid: { color: "#ddd" },
+            ticks: { callback: (value) => formatDurationHuman(value) },
+          },
+          x: {
+            title: { display: true, text: "Attempt" },
+            grid: { color: "#ddd" },
+          },
+        },
+        plugins: {
+          tooltip: {
+            callbacks: {
+              label: (item) => `Next attempt in ${formatDurationLong(item.parsed.y)}`,
+            },
+          },
         },
       },
     });
