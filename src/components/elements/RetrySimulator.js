@@ -591,24 +591,18 @@ export default function RetrySimulator() {
           <RetryPolicyParamInputs
             param="startToCloseTimeout"
             value={state.startToCloseTimeout}
-            max={100000}
-            step={100}
             updateRetryPolicyParam={updateRetryPolicyParam}
             updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
           <RetryPolicyParamInputs
             param="scheduleToCloseTimeout"
             value={state.scheduleToCloseTimeout}
-            max={24 * 60 * 60 * 1000}
-            step={60 * 1000}
             updateRetryPolicyParam={updateRetryPolicyParam}
             updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
           <RetryPolicyParamInputs
             param="scheduleToStartTimeout"
             value={state.scheduleToStartTimeout}
-            max={100000}
-            step={100}
             updateRetryPolicyParam={updateRetryPolicyParam}
             updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
@@ -624,24 +618,19 @@ export default function RetrySimulator() {
           <RetryPolicyParamInputs
             param="initialInterval"
             value={state.initialInterval}
-            min={1}
-            max={10000}
-            step={50}
             updateRetryPolicyParam={updateRetryPolicyParam}
             updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
           <RetryPolicyParamInputs
             param="maximumInterval"
             value={state.maximumInterval}
-            min={state.initialInterval.toMilliseconds()}
-            max={100000}
-            step={100}
             updateRetryPolicyParam={updateRetryPolicyParam}
             updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
           <RetryPolicyParamInputs
             param="maximumAttempts"
             value={state.maximumAttempts}
+            max={100}
             updateRetryPolicyParam={updateRetryPolicyParam}
             updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
@@ -899,13 +888,13 @@ function RetryPolicyParamInputs({
   const meta = PARAM_METADATA[param];
   const isDuration = value instanceof Duration;
   const inputValue = isDuration ? value.value : value;
-  // For Duration fields the slider/input bounds arrive in ms; rescale them
-  // to whatever display unit the user picked. The `|| 1` guards value=0.
-  const unitFactor = isDuration ? value.toMilliseconds() / value.value || 1 : 1;
-  const scale = isDuration ? (ms) => ms / unitFactor : (v) => v;
-  const sliderMin = isDuration ? (min ? Math.max(1, Math.round(scale(min))) : 0) : min || 0;
-  const sliderMax = isDuration ? Math.max(1, Math.round(scale(max))) : max || 100;
-  const sliderStep = isDuration ? Math.max(1, Math.round(scale(step))) : step || 1;
+  // Duration sliders share a fixed 0–100 range so the input width and
+  // slider position stay stable as the user switches units. Bare-number
+  // params (backoffCoefficient, maximumAttempts) keep the bounds passed
+  // by the call site.
+  const sliderMin = isDuration ? 0 : min || 0;
+  const sliderMax = isDuration ? 100 : max || 100;
+  const sliderStep = isDuration ? 1 : step || 1;
   return (
     <div className={styles.parameter}>
       <div className={styles.inputContainer}>
