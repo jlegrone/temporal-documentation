@@ -727,6 +727,12 @@ export default function RetrySimulator() {
             updateRetryPolicyParam={updateRetryPolicyParam}
             updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
+          <RetryPolicyParamInputs
+            param="heartbeatTimeout"
+            value={state.heartbeatTimeout}
+            updateRetryPolicyParam={updateRetryPolicyParam}
+            updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
+          />
           <h3>Retry Policy</h3>
           <RetryPolicyParamInputs
             param="backoffCoefficient"
@@ -814,18 +820,17 @@ export default function RetrySimulator() {
         <canvas ref={timelineCanvas}></canvas>
       </div>
       <div className={styles.worstCaseSection}>
-        <h3>Worst-Case Analysis</h3>
+        <h3>Policy Analysis</h3>
         <div className={styles.worstCaseRow}>
           <div className={styles.worstCaseValue}>
             {crashAttempts === Infinity ? "∞" : crashAttempts}
           </div>
           <div className={styles.worstCaseDescription}>
             <strong>Crash-loop attempts.</strong>{" "}
-            Maximum number of attempts that can run before{" "}
+            Maximum number of attempts that can run before being limited by either{" "}
             <a href="/encyclopedia/detecting-activity-failures#schedule-to-close-timeout" target="_blank" rel="noopener noreferrer">Schedule-To-Close Timeout</a>{" "}
-            fires when every attempt is killed by{" "}
-            <a href="/encyclopedia/detecting-activity-failures#start-to-close-timeout" target="_blank" rel="noopener noreferrer">Start-To-Close Timeout</a>
-            {" "}— for example, when the Worker crashes mid-attempt every retry and never reports a result. Set both timeouts to bound this number.
+            or{" "}
+            <a href="/encyclopedia/retry-policies#maximum-attempts" target="_blank" rel="noopener noreferrer">Maximum Attempts</a> if the worker crashes immediately on every attempt.
           </div>
         </div>
         <div className={styles.worstCaseRow}>
@@ -834,9 +839,7 @@ export default function RetrySimulator() {
           </div>
           <div className={styles.worstCaseDescription}>
             <strong>Time to exhaust retries.</strong>{" "}
-            How long the chain runs if every attempt reports a retryable error instantly, accumulating only the configured retry intervals between attempts. This is the floor on how quickly the policy will give up — set{" "}
-            <a href="/encyclopedia/retry-policies#maximum-attempts" target="_blank" rel="noopener noreferrer">Maximum Attempts</a>{" "}
-            to bound it.
+            The minimum time it would take to exhaust retries if every attempt reports a retryable error instantly, accumulating only the configured retry intervals between attempts. This is the worst case for how long a worker might be able to sustain retries during an outage.
           </div>
         </div>
       </div>
@@ -978,7 +981,7 @@ const PARAM_METADATA = {
   startToCloseTimeout: {
     label: "Start-To-Close",
     description:
-      "Maximum time allowed for a single Activity Task Execution. Either this or Schedule-To-Close must be set.",
+      "Maximum time allowed for a single Activity Execution. Either this or Heartbeat should be set.",
     href: "/encyclopedia/detecting-activity-failures#start-to-close-timeout",
     defaultDisplay: "∞",
   },
@@ -992,8 +995,15 @@ const PARAM_METADATA = {
   scheduleToCloseTimeout: {
     label: "Schedule-To-Close",
     description:
-      "Maximum time for the overall Activity Execution, from first scheduling to last completion.",
+      "Maximum time for all Activity attempts, from first scheduling to last completion.",
     href: "/encyclopedia/detecting-activity-failures#schedule-to-close-timeout",
+    defaultDisplay: "∞",
+  },
+  heartbeatTimeout: {
+    label: "Heartbeat",
+    description:
+      "Maximum time between Activity Heartbeats. Either this or Start-To-Close should be set.",
+    href: "/encyclopedia/detecting-activity-failures#heartbeat-timeout",
     defaultDisplay: "∞",
   },
   backoffCoefficient: {
@@ -1006,7 +1016,7 @@ const PARAM_METADATA = {
     label: "Initial Interval",
     description: "Amount of time that must elapse before the first retry occurs.",
     href: "/encyclopedia/retry-policies#initial-interval",
-    defaultDisplay: "1000ms",
+    defaultDisplay: "1s",
   },
   maximumAttempts: {
     label: "Maximum Attempts",

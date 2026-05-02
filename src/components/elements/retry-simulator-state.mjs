@@ -127,6 +127,7 @@ export const DURATION_FIELDS = [
   "scheduleToStartTimeout",
   "scheduleToCloseTimeout",
   "startToCloseTimeout",
+  "heartbeatTimeout",
   "initialInterval",
   "maximumInterval",
   "scheduleTime",
@@ -138,6 +139,7 @@ const DEFAULT_STATE = {
   scheduleToStartTimeout: new Duration(0, "s"),
   scheduleToCloseTimeout: new Duration(24, "h"),
   startToCloseTimeout: new Duration(0, "s"),
+  heartbeatTimeout: new Duration(0, "s"),
   backoffCoefficient: 2,
   initialInterval: DEFAULT_INITIAL_INTERVAL,
   scheduleTime: new Duration(0, "s"),
@@ -152,6 +154,7 @@ const NUMERIC_FIELDS = [
   "scheduleToStartTimeout",
   "scheduleToCloseTimeout",
   "startToCloseTimeout",
+  "heartbeatTimeout",
   "backoffCoefficient",
   "initialInterval",
   "scheduleTime",
@@ -513,15 +516,22 @@ export function calculateResult(state) {
  * otherwise unbounded.
  */
 export function crashLoopAttempts(state) {
-  if (state.startToCloseTimeout.toMilliseconds() <= 0) {
-    // Without a per-attempt cap, a crashed Worker never releases the in-flight
-    // attempt — a single attempt consumes the entire scheduleToCloseTimeout
-    // window. With neither timeout set, the worst case is unbounded.
+  // Heartbeat timeout fires faster on a crashed Worker than start-to-close
+  // (it watches for the missed heartbeats), so when set it's the operative
+  // per-attempt cap for this scenario; otherwise fall back to start-to-close.
+  const perAttempt =
+    state.heartbeatTimeout.toMilliseconds() > 0
+      ? state.heartbeatTimeout
+      : state.startToCloseTimeout;
+  if (perAttempt.toMilliseconds() <= 0) {
+    // Without any per-attempt cap, a crashed Worker never releases the
+    // in-flight attempt — a single attempt consumes the entire
+    // scheduleToCloseTimeout window. With neither cap set, unbounded.
     return state.scheduleToCloseTimeout.toMilliseconds() > 0 ? 1 : Infinity;
   }
   const result = calculateResult({
     ...state,
-    retries: [{ success: false, runtime: state.startToCloseTimeout }],
+    retries: [{ success: false, runtime: perAttempt }],
   });
   return result.success === null ? Infinity : result.attempts;
 }

@@ -24,6 +24,7 @@ test("empty input decodes to a complete default state", () => {
     scheduleToStartTimeout: new Duration(0, "s"),
     scheduleToCloseTimeout: new Duration(24, "h"),
     startToCloseTimeout: new Duration(0, "s"),
+    heartbeatTimeout: new Duration(0, "s"),
     backoffCoefficient: 2,
     initialInterval: new Duration(1, "s"),
     scheduleTime: new Duration(0, "s"),
@@ -46,6 +47,7 @@ test("default state encodes every field unconditionally", () => {
     Array.from(params.keys()).sort(),
     [
       "backoffCoefficient",
+      "heartbeatTimeout",
       "initialInterval",
       "language",
       "maximumAttempts",
@@ -111,6 +113,7 @@ test("full non-default state round-trips end-to-end", () => {
     scheduleToStartTimeout: new Duration(500, "ms"),
     scheduleToCloseTimeout: new Duration(20, "s"),
     startToCloseTimeout: new Duration(8, "s"),
+    heartbeatTimeout: new Duration(2, "s"),
     backoffCoefficient: 4,
     initialInterval: new Duration(750, "ms"),
     scheduleTime: new Duration(100, "ms"),
@@ -972,6 +975,24 @@ test("crashLoopAttempts: returns Infinity when no scheduleToCloseTimeout caps th
     maximumAttempts: 0,
   };
   assert.equal(crashLoopAttempts(state), Infinity);
+});
+
+test("crashLoopAttempts: uses heartbeatTimeout as the per-attempt cap when set", () => {
+  // Heartbeat fires faster than start-to-close on a crashed Worker, so the
+  // calculation should bind to heartbeatTimeout (1s) instead of the much
+  // larger startToCloseTimeout (5m). With initialInterval=0 and backoff=1,
+  // each cycle is 1s + 0s ≈ 1s; STT=10s allows 10 cycles.
+  const state = {
+    ...DEFAULTS,
+    heartbeatTimeout: new Duration(1, "s"),
+    startToCloseTimeout: new Duration(5, "m"),
+    scheduleToCloseTimeout: new Duration(10, "s"),
+    initialInterval: new Duration(0, "ms"),
+    backoffCoefficient: 1,
+    maximumInterval: new Duration(0, "s"),
+    maximumAttempts: 0,
+  };
+  assert.equal(crashLoopAttempts(state), 10);
 });
 
 test("crashLoopAttempts: counts attempts that fit inside scheduleToCloseTimeout", () => {
