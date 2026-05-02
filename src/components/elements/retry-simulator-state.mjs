@@ -167,7 +167,8 @@ const SUPPORTED_LANGUAGES = ["typescript", "go"];
 function encodeRetries(retries) {
   return retries
     .map((r) => {
-      let segment = `${r.success ? "succeed" : "fail"}:after:${r.runtime.toString()}`;
+      const outcome = r.crashed ? "crash" : r.success ? "succeed" : "fail";
+      let segment = `${outcome}:after:${r.runtime.toString()}`;
       if (r.period instanceof Duration) {
         segment += `:period:${r.period.toString()}`;
       } else if (r.count != null && r.count > 1) {
@@ -187,11 +188,12 @@ function decodeRetryPart(part) {
   const tokens = part.split(":");
   if (tokens.length >= 3 && tokens[1] === "after") {
     const outcome = tokens[0];
-    if (outcome !== "succeed" && outcome !== "fail") return null;
+    if (outcome !== "succeed" && outcome !== "fail" && outcome !== "crash") return null;
     const runtime = Duration.parse(tokens[2]);
     if (!runtime) return null;
 
     const retry = { success: outcome === "succeed", runtime };
+    if (outcome === "crash") retry.crashed = true;
     let i = 3;
     while (i < tokens.length) {
       const key = tokens[i];
@@ -276,6 +278,7 @@ export function calculateResult(state) {
   const startToCloseTimeout = state.startToCloseTimeout.toMilliseconds();
   const scheduleToCloseTimeout = state.scheduleToCloseTimeout.toMilliseconds();
   const scheduleToStartTimeout = state.scheduleToStartTimeout.toMilliseconds();
+  const heartbeatTimeout = state.heartbeatTimeout.toMilliseconds();
   const scheduleTime = state.scheduleTime.toMilliseconds();
   const initialInterval = state.initialInterval.toMilliseconds();
   const maximumInterval = state.maximumInterval.toMilliseconds();
@@ -299,11 +302,22 @@ export function calculateResult(state) {
   // Pre-compute per-entry numeric snapshots so the hot loop does only arithmetic.
   // Default to 1 attempt only when neither count nor period is configured;
   // a missing limit becomes Infinity so the per-iteration check stays uniform.
+  // For crashed entries the simulator substitutes the per-attempt cap at
+  // calc time (heartbeat preferred over start-to-close) — the entered
+  // runtime is irrelevant because in a real crash the Server can't observe
+  // any work done before the worker died.
+  const crashedRuntimeMS =
+    heartbeatTimeout > 0
+      ? heartbeatTimeout
+      : startToCloseTimeout > 0
+        ? startToCloseTimeout
+        : Infinity;
   const entries = state.retries.map((r) => {
     const periodMS = r.period instanceof Duration ? r.period.toMilliseconds() : null;
     return {
-      runtimeMS: r.runtime.toMilliseconds(),
-      success: r.success,
+      runtimeMS: r.crashed ? crashedRuntimeMS : r.runtime.toMilliseconds(),
+      success: r.crashed ? false : r.success,
+      crashed: !!r.crashed,
       countLimit: r.count ?? (periodMS != null ? Infinity : 1),
       periodLimitMS: periodMS ?? Infinity,
     };
@@ -319,6 +333,7 @@ export function calculateResult(state) {
     startToCloseTimeout > 0 && lastConfigured.runtimeMS >= startToCloseTimeout;
   const lastWouldFail = !lastConfigured.success || lastWouldTimeOut;
   const projectedRuntimeMS = lastWouldFail ? lastConfigured.runtimeMS : null;
+  const projectedCrashed = lastWouldFail && lastConfigured.crashed;
 
   // Detect open-ended infinite cases up front to avoid spinning in the loop:
   //   1. No maximumAttempts AND no scheduleToCloseTimeout — classic infinite retry.
@@ -365,10 +380,12 @@ export function calculateResult(state) {
   for (let i = 0; i < iterCap; ++i) {
     let currentRetryRuntime;
     let isSuccess;
+    let isCrashed = false;
     if (entryIndex < entries.length) {
       const entry = entries[entryIndex];
       currentRetryRuntime = entry.runtimeMS;
       isSuccess = entry.success;
+      isCrashed = entry.crashed;
     } else {
       if (projectedRuntimeMS == null) {
         return withTimeline({
@@ -380,6 +397,21 @@ export function calculateResult(state) {
       }
       currentRetryRuntime = projectedRuntimeMS;
       isSuccess = false;
+      isCrashed = projectedCrashed;
+    }
+
+    // A crashed attempt with neither a per-attempt cap (heartbeat,
+    // start-to-close) nor a chain-level cap (scheduleToCloseTimeout) sits
+    // in-flight indefinitely — the Server has no way to detect the dead
+    // Worker, so the activity never gets to retry. maximumAttempts is
+    // irrelevant here: the Server never observes the (single) failure.
+    if (currentRetryRuntime === Infinity && scheduleToCloseTimeout <= 0) {
+      return withTimeline({
+        success: null,
+        runtimeMS: totalRuntimeMS,
+        attempts: Infinity,
+        reason: "neverTerminates",
+      });
     }
 
     // startToCloseTimeout is a per-attempt cap, not a terminal failure. If the
@@ -388,7 +420,11 @@ export function calculateResult(state) {
     // of the user's intended outcome. The retry policy then decides whether
     // to schedule another Activity Task.
     let attemptElapsed = currentRetryRuntime;
-    let timedOut = false;
+    // Crashed attempts always end via timeout (heartbeat or start-to-close);
+    // mark them as such even when the substituted runtime is shorter than
+    // startToCloseTimeout (heartbeat case).
+    let timedOut = isCrashed;
+    if (isCrashed) isSuccess = false;
     if (startToCloseTimeout > 0 && currentRetryRuntime >= startToCloseTimeout) {
       attemptElapsed = startToCloseTimeout;
       timedOut = true;
@@ -509,47 +545,54 @@ export function calculateResult(state) {
   });
 }
 
-/**
- * Worst-case attempt count assuming every attempt is killed by
- * startToCloseTimeout (e.g. the worker crashes mid-attempt every time).
- * Returns Infinity when there's no per-attempt cap or the chain is
- * otherwise unbounded.
- */
-export function crashLoopAttempts(state) {
-  // Heartbeat timeout fires faster on a crashed Worker than start-to-close
-  // (it watches for the missed heartbeats), so when set it's the operative
-  // per-attempt cap for this scenario; otherwise fall back to start-to-close.
-  const perAttempt =
-    state.heartbeatTimeout.toMilliseconds() > 0
-      ? state.heartbeatTimeout
-      : state.startToCloseTimeout;
-  if (perAttempt.toMilliseconds() <= 0) {
-    // Without any per-attempt cap, a crashed Worker never releases the
-    // in-flight attempt — a single attempt consumes the entire
-    // scheduleToCloseTimeout window. With neither cap set, unbounded.
-    return state.scheduleToCloseTimeout.toMilliseconds() > 0 ? 1 : Infinity;
-  }
-  const result = calculateResult({
-    ...state,
-    retries: [{ success: false, runtime: perAttempt }],
-  });
-  return result.success === null ? Infinity : result.attempts;
+function worstCaseFromResult(result) {
+  return {
+    attempts: result.success === null ? Infinity : result.attempts,
+    runtimeMS: result.success === null ? Infinity : result.runtimeMS,
+  };
 }
 
 /**
- * Worst-case wall-clock time to exhaust maximumAttempts assuming every
- * attempt reports a retryable error instantly (zero elapsed per attempt).
- * Returns Infinity when maximumAttempts is unlimited.
+ * Worst-case attempts and elapsed time when the Worker crashes mid-attempt
+ * every retry. Each attempt's elapsed time comes from heartbeatTimeout when
+ * set, otherwise startToCloseTimeout, otherwise the attempt sits in-flight
+ * until scheduleToCloseTimeout (or never terminates).
+ *
+ * Reuses calculateResult against the same synthesized chain that the
+ * Visualize button installs, so the displayed numbers reconcile exactly
+ * with the timeline.
  */
-export function zeroDelayExhaustionMS(state) {
+export function crashLoopWorstCase(state) {
+  const heartbeat = state.heartbeatTimeout.toMilliseconds() > 0
+    ? state.heartbeatTimeout
+    : null;
+  const stc = state.startToCloseTimeout.toMilliseconds() > 0
+    ? state.startToCloseTimeout
+    : null;
+  const runtime = heartbeat ?? stc ?? new Duration(0, "s");
+  return worstCaseFromResult(
+    calculateResult({
+      ...state,
+      retries: [{ success: false, crashed: true, runtime }],
+    })
+  );
+}
+
+/**
+ * Worst-case attempts and elapsed time when every attempt reports a
+ * retryable error instantly (zero elapsed per attempt). The chain is
+ * bounded by maximumAttempts and scheduleToCloseTimeout.
+ */
+export function failFastWorstCase(state) {
   if (state.maximumAttempts <= 0 && state.scheduleToCloseTimeout.toMilliseconds() <= 0) {
-    return Infinity;
+    return { attempts: Infinity, runtimeMS: Infinity };
   }
-  const result = calculateResult({
-    ...state,
-    retries: [{ success: false, runtime: new Duration(0, "ms") }],
-  });
-  return result.success === null ? Infinity : result.runtimeMS;
+  return worstCaseFromResult(
+    calculateResult({
+      ...state,
+      retries: [{ success: false, runtime: new Duration(0, "ms") }],
+    })
+  );
 }
 
 export function decodeStateFromParams(search) {

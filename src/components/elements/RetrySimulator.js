@@ -9,12 +9,12 @@ import {
   UNIT_LABELS,
   UNIT_TO_GO,
   calculateResult,
-  crashLoopAttempts,
+  crashLoopWorstCase,
   decodeStateFromParams,
   encodeStateToParams,
+  failFastWorstCase,
   formatDurationHuman,
   formatDurationLong,
-  zeroDelayExhaustionMS,
 } from "./retry-simulator-state.mjs";
 
 // Per-attempt bar colors on the retry-interval chart.
@@ -401,6 +401,9 @@ export default function RetrySimulator() {
     if (update.period === null) {
       delete retries[index].period;
     }
+    if (update.crashed === null) {
+      delete retries[index].crashed;
+    }
     setState({ ...state, retries });
   }
 
@@ -475,6 +478,27 @@ export default function RetrySimulator() {
     setState({ ...state, [prop]: state[prop].withUnit(unit) });
   }
 
+  function visualizeCrashLoop() {
+    const heartbeat = state.heartbeatTimeout.toMilliseconds() > 0
+      ? state.heartbeatTimeout
+      : null;
+    const stc = state.startToCloseTimeout.toMilliseconds() > 0
+      ? state.startToCloseTimeout
+      : null;
+    const runtime = heartbeat ?? stc ?? new Duration(0, "s");
+    setState({
+      ...state,
+      retries: withRetryKeys([{ success: false, crashed: true, runtime }]),
+    });
+  }
+
+  function visualizeFailFast() {
+    setState({
+      ...state,
+      retries: withRetryKeys([{ success: false, runtime: new Duration(0, "ms") }]),
+    });
+  }
+
   function updateLanguage(language) {
     setState({ ...state, language });
   }
@@ -485,8 +509,8 @@ export default function RetrySimulator() {
   const code = retryPolicyCode(state);
   const eventType = resultEventType(success, reason, lastAttemptOutcome);
   const detailsLink = resultDetailsLink(success, reason, lastAttemptOutcome);
-  const crashAttempts = crashLoopAttempts(state);
-  const exhaustMS = zeroDelayExhaustionMS(state);
+  const crashLoop = crashLoopWorstCase(state);
+  const failFast = failFastWorstCase(state);
 
   useEffect(function initializeChart() {
     const chart = new Chart(chartCanvas.current, {
@@ -531,7 +555,7 @@ export default function RetrySimulator() {
         scales: {
           x: {
             type: "linear",
-            title: { display: true, text: "Wall-clock time" },
+            title: { display: true, text: "Time since activity scheduled" },
             grid: { color: "#ddd" },
             ticks: {
               callback: (value) => formatDurationHuman(value),
@@ -699,6 +723,8 @@ export default function RetrySimulator() {
                 index={index}
                 updateRetry={updateRetry}
                 deleteRetry={deleteRetry}
+                heartbeatTimeout={state.heartbeatTimeout}
+                startToCloseTimeout={state.startToCloseTimeout}
                 key={retry._key}
               />
             ))}
@@ -821,33 +847,118 @@ export default function RetrySimulator() {
       </div>
       <div className={styles.worstCaseSection}>
         <h3>Policy Analysis</h3>
-        <div className={styles.worstCaseRow}>
-          <div className={styles.worstCaseValue}>
-            {crashAttempts === Infinity ? "∞" : crashAttempts}
+        <div className={styles.scenarioCard}>
+          <div className={styles.scenarioHeader}>
+            <strong>Crash Loop</strong>
+            <button
+              type="button"
+              className={styles.visualizeButton}
+              onClick={visualizeCrashLoop}
+            >
+              Visualize
+            </button>
           </div>
-          <div className={styles.worstCaseDescription}>
-            <strong>Crash-loop attempts.</strong>{" "}
-            Maximum number of attempts that can run before being limited by either{" "}
-            <a href="/encyclopedia/detecting-activity-failures#schedule-to-close-timeout" target="_blank" rel="noopener noreferrer">Schedule-To-Close Timeout</a>{" "}
+          <div className={styles.scenarioMetrics}>
+            <div className={styles.scenarioMetric}>
+              <div className={styles.metricValue}>
+                {crashLoop.attempts === Infinity ? "∞" : crashLoop.attempts}
+              </div>
+              <div className={styles.metricLabel}>Attempts</div>
+            </div>
+            <div className={styles.scenarioMetric}>
+              <div className={styles.metricValue}>
+                {crashLoop.runtimeMS === Infinity
+                  ? "∞"
+                  : formatDurationLong(crashLoop.runtimeMS)}
+              </div>
+              <div className={styles.metricLabel}>Total Runtime</div>
+            </div>
+          </div>
+          <p className={styles.scenarioDescription}>
+            Maximum attempts and elapsed time when the Worker crashes mid-attempt every retry.
+            Each attempt's elapsed time comes from{" "}
+            <a
+              href="/encyclopedia/detecting-activity-failures#heartbeat-timeout"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Heartbeat Timeout
+            </a>{" "}
+            when set, otherwise{" "}
+            <a
+              href="/encyclopedia/detecting-activity-failures#start-to-close-timeout"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Start-To-Close Timeout
+            </a>
+            . The chain ends at{" "}
+            <a
+              href="/encyclopedia/detecting-activity-failures#schedule-to-close-timeout"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Schedule-To-Close Timeout
+            </a>{" "}
             or{" "}
-            <a href="/encyclopedia/retry-policies#maximum-attempts" target="_blank" rel="noopener noreferrer">Maximum Attempts</a> if the worker crashes immediately on every attempt.
-          </div>
+            <a
+              href="/encyclopedia/retry-policies#maximum-attempts"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Maximum Attempts
+            </a>
+            , whichever fires first.
+          </p>
         </div>
-        <div className={styles.worstCaseRow}>
-          <div className={styles.worstCaseValue}>
-            {exhaustMS === Infinity ? "∞" : formatDurationLong(exhaustMS)}
+        <div className={styles.scenarioCard}>
+          <div className={styles.scenarioHeader}>
+            <strong>Fail Fast</strong>
+            <button
+              type="button"
+              className={styles.visualizeButton}
+              onClick={visualizeFailFast}
+            >
+              Visualize
+            </button>
           </div>
-          <div className={styles.worstCaseDescription}>
-            <strong>Time to exhaust retries.</strong>{" "}
-            The minimum time it would take to exhaust retries if every attempt reports a retryable error instantly, accumulating only the configured retry intervals between attempts. This is the worst case for how long a worker might be able to sustain retries during an outage.
+          <div className={styles.scenarioMetrics}>
+            <div className={styles.scenarioMetric}>
+              <div className={styles.metricValue}>
+                {failFast.attempts === Infinity ? "∞" : failFast.attempts}
+              </div>
+              <div className={styles.metricLabel}>Attempts</div>
+            </div>
+            <div className={styles.scenarioMetric}>
+              <div className={styles.metricValue}>
+                {failFast.runtimeMS === Infinity
+                  ? "∞"
+                  : formatDurationLong(failFast.runtimeMS)}
+              </div>
+              <div className={styles.metricLabel}>Total Runtime</div>
+            </div>
           </div>
+          <p className={styles.scenarioDescription}>
+            Minimum attempts and elapsed time when every attempt reports a
+            retryable error instantly, accumulating only the configured retry
+            intervals between attempts. This is the floor on how quickly the
+            policy can give up during an outage.
+          </p>
         </div>
       </div>
     </div>
   );
 }
 
-function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
+function RetryConfig({
+  retry,
+  numRetries,
+  index,
+  updateRetry,
+  deleteRetry,
+  heartbeatTimeout,
+  startToCloseTimeout,
+}) {
   const runtime = retry.runtime;
   const periodMode = retry.period instanceof Duration;
   // Remember the inactive mode's last value/unit across toggles so switching
@@ -866,41 +977,65 @@ function RetryConfig({ retry, numRetries, index, updateRetry, deleteRetry }) {
   }, [retry.period]);
   const count = retry.count ?? stashedCount;
   const period = retry.period instanceof Duration ? retry.period : stashedPeriod;
+  const outcome = retry.crashed ? "crashes" : retry.success ? "succeeds" : "fails";
+  const crashedRuntimeLabel = (() => {
+    if (heartbeatTimeout && heartbeatTimeout.toMilliseconds() > 0) {
+      return `Heartbeat Timeout (${heartbeatTimeout.toString()})`;
+    }
+    if (startToCloseTimeout && startToCloseTimeout.toMilliseconds() > 0) {
+      return `Start-To-Close Timeout (${startToCloseTimeout.toString()})`;
+    }
+    return "(no timeout — chain stalls)";
+  })();
   return (
     <div className={styles.retry}>
       <div className={styles.inputContainer}>
         <select
           className={styles.numberInputLabel}
-          value={retry.success ? "succeeds" : "fails"}
-          onChange={(ev) => updateRetry(index, { success: ev.target.value === "succeeds" })}
+          value={outcome}
+          onChange={(ev) => {
+            const v = ev.target.value;
+            if (v === "crashes") {
+              updateRetry(index, { success: false, crashed: true });
+            } else {
+              updateRetry(index, { success: v === "succeeds", crashed: null });
+            }
+          }}
         >
           <option value="fails">Fails after</option>
           <option value="succeeds">Succeeds after</option>
+          <option value="crashes">Crashes</option>
         </select>
         {/* With float: right, the element rendered first ends up rightmost. */}
-        <select
-          className={styles.unitSelect}
-          value={runtime.unit}
-          onChange={(ev) =>
-            updateRetry(index, { runtime: runtime.withUnit(ev.target.value) })
-          }
-        >
-          {DURATION_UNITS.map((u) => (
-            <option key={u} value={u}>
-              {UNIT_LABELS[u]}
-            </option>
-          ))}
-        </select>
-        <input
-          type="number"
-          className={styles.numberInput}
-          value={runtime.value}
-          onChange={(ev) => {
-            const next = +ev.target.value;
-            if (isNaN(next)) return;
-            updateRetry(index, { runtime: runtime.withValue(next) });
-          }}
-        />
+        {retry.crashed ? (
+          <span className={styles.crashedRuntimeLabel}>{crashedRuntimeLabel}</span>
+        ) : (
+          <>
+            <select
+              className={styles.unitSelect}
+              value={runtime.unit}
+              onChange={(ev) =>
+                updateRetry(index, { runtime: runtime.withUnit(ev.target.value) })
+              }
+            >
+              {DURATION_UNITS.map((u) => (
+                <option key={u} value={u}>
+                  {UNIT_LABELS[u]}
+                </option>
+              ))}
+            </select>
+            <input
+              type="number"
+              className={styles.numberInput}
+              value={runtime.value}
+              onChange={(ev) => {
+                const next = +ev.target.value;
+                if (isNaN(next)) return;
+                updateRetry(index, { runtime: runtime.withValue(next) });
+              }}
+            />
+          </>
+        )}
         <button
           type="button"
           className={styles.removeRetry}

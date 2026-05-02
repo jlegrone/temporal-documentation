@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import {
   Duration,
   calculateResult,
-  crashLoopAttempts,
+  crashLoopWorstCase,
   decodeStateFromParams,
   encodeStateToParams,
+  failFastWorstCase,
   formatDurationHuman,
   formatDurationLong,
-  zeroDelayExhaustionMS,
 } from "./retry-simulator-state.mjs";
 
 const DEFAULTS = decodeStateFromParams("");
@@ -949,24 +949,27 @@ test("never-terminating chain still populates attemptTimeline", () => {
   assert.ok(result.attemptTimeline.every((a) => a.outcome === "failed"));
 });
 
-test("crashLoopAttempts: returns 1 when no startToCloseTimeout but a scheduleToCloseTimeout is set", () => {
-  // DEFAULTS has scheduleToCloseTimeout=24h with no startToCloseTimeout — a
-  // crashed Worker never releases the in-flight attempt, so a single attempt
-  // consumes the whole 24h window.
-  assert.equal(crashLoopAttempts(DEFAULTS), 1);
+test("crashLoopWorstCase: 1 attempt that hangs to scheduleToCloseTimeout when no per-attempt cap is set", () => {
+  // DEFAULTS has scheduleToCloseTimeout=24h with no heartbeat or
+  // startToCloseTimeout — a crashed Worker never releases the in-flight
+  // attempt, so a single attempt consumes the whole 24h window.
+  const result = crashLoopWorstCase(DEFAULTS);
+  assert.equal(result.attempts, 1);
+  assert.equal(result.runtimeMS, 24 * 3_600_000);
 });
 
-test("crashLoopAttempts: returns Infinity when neither timeout is set", () => {
+test("crashLoopWorstCase: Infinity attempts/runtime when neither timeout nor SCT is set", () => {
   const state = {
     ...DEFAULTS,
     startToCloseTimeout: new Duration(0, "s"),
+    heartbeatTimeout: new Duration(0, "s"),
     scheduleToCloseTimeout: new Duration(0, "s"),
   };
-  assert.equal(crashLoopAttempts(state), Infinity);
+  assert.deepEqual(crashLoopWorstCase(state), { attempts: Infinity, runtimeMS: Infinity });
 });
 
-test("crashLoopAttempts: returns Infinity when no scheduleToCloseTimeout caps the chain", () => {
-  // STC set, but no STT and unlimited maxAttempts → calculateResult bails as
+test("crashLoopWorstCase: Infinity when no scheduleToCloseTimeout caps the unbounded chain", () => {
+  // STT set, but no SCT and unlimited maxAttempts → calculateResult bails as
   // never-terminates and the worst case is unbounded.
   const state = {
     ...DEFAULTS,
@@ -974,14 +977,14 @@ test("crashLoopAttempts: returns Infinity when no scheduleToCloseTimeout caps th
     scheduleToCloseTimeout: new Duration(0, "s"),
     maximumAttempts: 0,
   };
-  assert.equal(crashLoopAttempts(state), Infinity);
+  assert.deepEqual(crashLoopWorstCase(state), { attempts: Infinity, runtimeMS: Infinity });
 });
 
-test("crashLoopAttempts: uses heartbeatTimeout as the per-attempt cap when set", () => {
+test("crashLoopWorstCase: uses heartbeatTimeout as the per-attempt cap when set", () => {
   // Heartbeat fires faster than start-to-close on a crashed Worker, so the
   // calculation should bind to heartbeatTimeout (1s) instead of the much
   // larger startToCloseTimeout (5m). With initialInterval=0 and backoff=1,
-  // each cycle is 1s + 0s ≈ 1s; STT=10s allows 10 cycles.
+  // each cycle is 1s + 0s ≈ 1s; SCT=10s allows 10 cycles.
   const state = {
     ...DEFAULTS,
     heartbeatTimeout: new Duration(1, "s"),
@@ -992,12 +995,14 @@ test("crashLoopAttempts: uses heartbeatTimeout as the per-attempt cap when set",
     maximumInterval: new Duration(0, "s"),
     maximumAttempts: 0,
   };
-  assert.equal(crashLoopAttempts(state), 10);
+  const result = crashLoopWorstCase(state);
+  assert.equal(result.attempts, 10);
+  assert.equal(result.runtimeMS, 10_000);
 });
 
-test("crashLoopAttempts: counts attempts that fit inside scheduleToCloseTimeout", () => {
-  // Each attempt: 1s STC. Initial interval 1s, backoff 1, maximumInterval 1s
-  // → cycle length 2s. STT=10s → 5 cycles fit. Attempt 6 starts at 10s
+test("crashLoopWorstCase: counts attempts that fit inside scheduleToCloseTimeout", () => {
+  // Each attempt: 1s STT. Initial interval 1s, backoff 1, maximumInterval 1s
+  // → cycle length 2s. SCT=10s → 5 cycles fit. Attempt 6 starts at 10s
   // and the post-attempt check ends the chain at scheduleToCloseTimeout.
   const state = {
     ...DEFAULTS,
@@ -1008,10 +1013,12 @@ test("crashLoopAttempts: counts attempts that fit inside scheduleToCloseTimeout"
     maximumInterval: new Duration(1, "s"),
     maximumAttempts: 0,
   };
-  assert.equal(crashLoopAttempts(state), 5);
+  const result = crashLoopWorstCase(state);
+  assert.equal(result.attempts, 5);
+  assert.equal(result.runtimeMS, 10_000);
 });
 
-test("crashLoopAttempts: returns the smaller of maxAttempts and the STT-bound count", () => {
+test("crashLoopWorstCase: returns the smaller of maxAttempts and the SCT-bound count", () => {
   // STT alone would allow 5 cycles (see test above), but maxAttempts caps at 3.
   const state = {
     ...DEFAULTS,
@@ -1022,19 +1029,22 @@ test("crashLoopAttempts: returns the smaller of maxAttempts and the STT-bound co
     maximumInterval: new Duration(1, "s"),
     maximumAttempts: 3,
   };
-  assert.equal(crashLoopAttempts(state), 3);
+  const result = crashLoopWorstCase(state);
+  assert.equal(result.attempts, 3);
+  // 3 attempts of 1s each + 2 retry intervals of 1s = 5s.
+  assert.equal(result.runtimeMS, 5_000);
 });
 
-test("zeroDelayExhaustionMS: returns Infinity when neither maximumAttempts nor scheduleToCloseTimeout bounds the chain", () => {
+test("failFastWorstCase: Infinity when neither maximumAttempts nor scheduleToCloseTimeout bounds the chain", () => {
   const state = {
     ...DEFAULTS,
     maximumAttempts: 0,
     scheduleToCloseTimeout: new Duration(0, "s"),
   };
-  assert.equal(zeroDelayExhaustionMS(state), Infinity);
+  assert.deepEqual(failFastWorstCase(state), { attempts: Infinity, runtimeMS: Infinity });
 });
 
-test("zeroDelayExhaustionMS: bounded by scheduleToCloseTimeout when maximumAttempts is unlimited", () => {
+test("failFastWorstCase: bounded by scheduleToCloseTimeout when maximumAttempts is unlimited", () => {
   // Initial interval 10s, backoff 1, max interval 10s, SCT 1m.
   // With 0ms attempt runtime, the chain ends when the cumulative wait
   // would exceed SCT — 10s × 6 = 60s.
@@ -1046,15 +1056,19 @@ test("zeroDelayExhaustionMS: bounded by scheduleToCloseTimeout when maximumAttem
     maximumInterval: new Duration(10, "s"),
     scheduleToCloseTimeout: new Duration(1, "m"),
   };
-  assert.equal(zeroDelayExhaustionMS(state), 60_000);
+  const result = failFastWorstCase(state);
+  assert.equal(result.runtimeMS, 60_000);
+  assert.ok(Number.isFinite(result.attempts));
 });
 
-test("zeroDelayExhaustionMS: returns 0 when maximumAttempts is 1 (no retry intervals)", () => {
+test("failFastWorstCase: 0 runtime when maximumAttempts is 1 (no retry intervals)", () => {
   const state = { ...DEFAULTS, maximumAttempts: 1 };
-  assert.equal(zeroDelayExhaustionMS(state), 0);
+  const result = failFastWorstCase(state);
+  assert.equal(result.attempts, 1);
+  assert.equal(result.runtimeMS, 0);
 });
 
-test("zeroDelayExhaustionMS: sums backoff intervals, capped at maximumInterval", () => {
+test("failFastWorstCase: sums backoff intervals, capped at maximumInterval", () => {
   // 5 attempts with initialInterval=1s, backoff=2, maximumInterval=4s.
   // The simulator's first interval is initial * backoff (= 2s), so intervals
   // for attempts 2..5 are: 2s, 4s, 4s, 4s — total 14s.
@@ -1066,10 +1080,12 @@ test("zeroDelayExhaustionMS: sums backoff intervals, capped at maximumInterval",
     maximumAttempts: 5,
     scheduleToCloseTimeout: new Duration(24, "h"),
   };
-  assert.equal(zeroDelayExhaustionMS(state), 14000);
+  const result = failFastWorstCase(state);
+  assert.equal(result.attempts, 5);
+  assert.equal(result.runtimeMS, 14_000);
 });
 
-test("zeroDelayExhaustionMS: returns Infinity once maximumAttempts exceeds the iteration guard", () => {
+test("failFastWorstCase: Infinity once maximumAttempts exceeds the iteration guard", () => {
   const state = {
     ...DEFAULTS,
     initialInterval: new Duration(1, "ms"),
@@ -1078,5 +1094,88 @@ test("zeroDelayExhaustionMS: returns Infinity once maximumAttempts exceeds the i
     maximumAttempts: 5000,
     scheduleToCloseTimeout: new Duration(24, "h"),
   };
-  assert.equal(zeroDelayExhaustionMS(state), Infinity);
+  assert.deepEqual(failFastWorstCase(state), { attempts: Infinity, runtimeMS: Infinity });
+});
+
+test("calculateResult: crashed entry uses heartbeatTimeout for elapsed time", () => {
+  const state = {
+    ...DEFAULTS,
+    heartbeatTimeout: new Duration(15, "s"),
+    startToCloseTimeout: new Duration(5, "m"),
+    scheduleToCloseTimeout: new Duration(0, "s"),
+    initialInterval: new Duration(0, "s"),
+    maximumInterval: new Duration(0, "s"),
+    backoffCoefficient: 1,
+    maximumAttempts: 3,
+    retries: [{ success: false, crashed: true, runtime: new Duration(0, "s") }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.attempts, 3);
+  assert.equal(result.runtimeMS, 45_000); // 3 × 15s
+  assert.ok(result.attemptTimeline.slice(0, 3).every((a) => a.outcome === "timedOut"));
+});
+
+test("calculateResult: crashed entry falls back to startToCloseTimeout when heartbeat is unset", () => {
+  const state = {
+    ...DEFAULTS,
+    heartbeatTimeout: new Duration(0, "s"),
+    startToCloseTimeout: new Duration(5, "m"),
+    scheduleToCloseTimeout: new Duration(0, "s"),
+    initialInterval: new Duration(0, "s"),
+    maximumInterval: new Duration(0, "s"),
+    backoffCoefficient: 1,
+    maximumAttempts: 2,
+    retries: [{ success: false, crashed: true, runtime: new Duration(0, "s") }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.attempts, 2);
+  assert.equal(result.runtimeMS, 600_000); // 2 × 5m
+});
+
+test("calculateResult: crashed entry with no caps and no SCT never terminates", () => {
+  const state = {
+    ...DEFAULTS,
+    heartbeatTimeout: new Duration(0, "s"),
+    startToCloseTimeout: new Duration(0, "s"),
+    scheduleToCloseTimeout: new Duration(0, "s"),
+    maximumAttempts: 5,
+    retries: [{ success: false, crashed: true, runtime: new Duration(0, "s") }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.success, null);
+  assert.equal(result.reason, "neverTerminates");
+});
+
+test("calculateResult: crashed entry with no caps but SCT clamps single attempt", () => {
+  const state = {
+    ...DEFAULTS,
+    heartbeatTimeout: new Duration(0, "s"),
+    startToCloseTimeout: new Duration(0, "s"),
+    scheduleToCloseTimeout: new Duration(10, "s"),
+    maximumAttempts: 0,
+    retries: [{ success: false, crashed: true, runtime: new Duration(0, "s") }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.attempts, 1);
+  assert.equal(result.runtimeMS, 10_000);
+  assert.equal(result.reason, "scheduleToCloseTimeout");
+});
+
+test("crashed retry round-trips through URL encoding", () => {
+  const state = {
+    ...DEFAULTS,
+    retries: [{ success: false, crashed: true, runtime: new Duration(0, "s") }],
+  };
+  const decoded = roundTrip(state);
+  assert.deepEqual(decoded.retries, [
+    { success: false, crashed: true, runtime: new Duration(0, "s") },
+  ]);
+});
+
+test("URL encodes crashed retries with the 'crash' outcome token", () => {
+  const params = encodeStateToParams({
+    ...DEFAULTS,
+    retries: [{ success: false, crashed: true, runtime: new Duration(0, "s") }],
+  });
+  assert.equal(params.get("retries"), "crash:after:0s");
 });

@@ -236,27 +236,63 @@
   border-top: 1px solid #ddd;
 }
 
-.worstCaseRow {
+.scenarioCard {
+  padding: 0.75em 1em;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  margin-bottom: 1em;
+}
+
+.scenarioHeader {
   display: flex;
-  align-items: baseline;
+  justify-content: space-between;
+  align-items: center;
   gap: 1em;
-  padding: 0.6em 0;
+  margin-bottom: 0.5em;
 }
 
-.worstCaseRow + .worstCaseRow {
-  border-top: 1px solid rgba(128, 128, 128, 0.15);
+.visualizeButton {
+  padding: 0.25em 0.75em;
+  cursor: pointer;
+  border: 1px solid #ddd;
+  background-color: var(--ifm-background-color);
+  color: var(--docsearch-text-color);
+  border-radius: 3px;
 }
 
-.worstCaseValue {
-  flex: 0 0 12em;
+.scenarioMetrics {
+  display: flex;
+  gap: 2em;
+  margin: 0.5em 0 0.75em;
+}
+
+.scenarioMetric {
+  display: flex;
+  flex-direction: column;
+  min-width: 8em;
+}
+
+.metricValue {
   font-size: 1.5em;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
-.worstCaseDescription {
-  flex: 1;
+.metricLabel {
+  font-size: 0.85em;
   color: var(--ifm-color-emphasis-700);
+}
+
+.scenarioDescription {
   font-size: 0.95em;
+  color: var(--ifm-color-emphasis-700);
   line-height: 1.5;
+  margin: 0;
+}
+
+.crashedRuntimeLabel {
+  float: right;
+  padding: 0.1em 0.5em;
+  font-style: italic;
+  color: var(--ifm-color-emphasis-700);
 }
