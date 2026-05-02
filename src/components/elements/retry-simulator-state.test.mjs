@@ -688,6 +688,52 @@ test("calculateResult: scheduleToCloseTimeout caps reported runtimeMS at the tim
   assert.equal(result.runtimeMS, 5000);
 });
 
+test("calculateResult: a single attempt that overshoots scheduleToCloseTimeout records one truncated 'timedOut' bar", () => {
+  // The pre-attempt cap must consider attemptStartMS + attemptElapsed, not
+  // attemptStartMS alone — otherwise a 10s attempt against a 5s deadline
+  // records its full untruncated bar and appends a ghost past the deadline.
+  const state = {
+    ...DEFAULTS,
+    scheduleToCloseTimeout: new Duration(5, "s"),
+    retries: [{ success: false, runtime: new Duration(10, "s") }],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.attemptTimeline.length, 1);
+  assert.deepEqual(result.attemptTimeline[0], {
+    startMS: 0,
+    elapsedMS: 5000,
+    outcome: "timedOut",
+  });
+  assert.equal(result.reason, "scheduleToCloseTimeout");
+});
+
+test("calculateResult: a later attempt that overshoots scheduleToCloseTimeout truncates at the remaining budget", () => {
+  // Same defect class as the first-attempt case, but with a non-zero
+  // attemptStartMS so the cappedElapsed = scheduleToCloseTimeout - attemptStartMS
+  // arithmetic is exercised. First attempt: 1s runtime + 2s retry interval
+  // (initialInterval × backoffCoefficient) = 3s consumed; second attempt would
+  // run 10s but only 2s remain before the 5s deadline.
+  const state = {
+    ...DEFAULTS,
+    initialInterval: new Duration(1, "s"),
+    backoffCoefficient: 2,
+    scheduleToCloseTimeout: new Duration(5, "s"),
+    retries: [
+      { success: false, runtime: new Duration(1, "s") },
+      { success: false, runtime: new Duration(10, "s") },
+    ],
+  };
+  const result = calculateResult(state);
+  assert.equal(result.attemptTimeline.length, 2);
+  assert.deepEqual(result.attemptTimeline[1], {
+    startMS: 3000,
+    elapsedMS: 2000,
+    outcome: "timedOut",
+  });
+  assert.equal(result.reason, "scheduleToCloseTimeout");
+  assert.equal(result.runtimeMS, 5000);
+});
+
 test("calculateResult: maximumAttempts limits retries", () => {
   const state = {
     ...DEFAULTS,
