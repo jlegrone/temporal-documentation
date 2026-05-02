@@ -770,6 +770,8 @@ test("calculateResult returns attemptTimeline with monotonic startMS", () => {
   };
   const result = calculateResult(state);
   const tl = result.attemptTimeline;
+  // No ghost on a successful chain — the activity reported success, no
+  // retry was suppressed by a limit.
   assert.equal(tl.length, 3);
   // Monotonic non-decreasing startMS, each follows the previous attempt + retry interval.
   assert.equal(tl[0].startMS, 0);
@@ -786,7 +788,8 @@ test("calculateResult returns attemptTimeline with monotonic startMS", () => {
 
 test("calculateResult: attemptTimeline elapsedMS clamps at startToCloseTimeout", () => {
   // Each attempt's runtime is 5s but startToCloseTimeout caps at 2s; every
-  // attempt should record elapsedMS=2000 with outcome "timedOut".
+  // real attempt should record elapsedMS=2000 with outcome "timedOut", plus
+  // a notUsed ghost at the end showing where attempt 4 would have been.
   const state = {
     ...DEFAULTS,
     startToCloseTimeout: new Duration(2, "s"),
@@ -798,11 +801,12 @@ test("calculateResult: attemptTimeline elapsedMS clamps at startToCloseTimeout",
   };
   const result = calculateResult(state);
   const tl = result.attemptTimeline;
-  assert.equal(tl.length, 3);
-  for (const a of tl) {
+  assert.equal(tl.length, 4);
+  for (const a of tl.slice(0, 3)) {
     assert.equal(a.elapsedMS, 2000);
     assert.equal(a.outcome, "timedOut");
   }
+  assert.equal(tl[3].outcome, "notUsed");
 });
 
 test("calculateResult: lastAttemptOutcome reflects the final attempt's outcome", () => {

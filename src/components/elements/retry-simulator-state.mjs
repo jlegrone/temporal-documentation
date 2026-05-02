@@ -431,7 +431,21 @@ export function calculateResult(state) {
       });
     }
 
+    // Push a "ghost" attempt before terminating returns so the chart shows
+    // where the next attempt would have been if the limiting condition (the
+    // success, the maximumAttempts cap, or scheduleToCloseTimeout) hadn't
+    // fired. The ghost mirrors the last attempt's elapsed time.
+    const pushGhost = (startMS) => {
+      if (timeline.length < ATTEMPT_TIMELINE_CAP) {
+        timeline.push({ startMS, elapsedMS: attemptElapsed, outcome: "notUsed" });
+      }
+    };
+    const nextStartMS = () =>
+      totalRuntimeMS + Math.min(retryIntervalMS * backoffCoefficient, maximumInterval);
+
     if (isSuccess) {
+      // No ghost on success — the chain ended because the activity reported
+      // a final result, not because a retry was suppressed by a limit.
       return withTimeline({
         success: true,
         runtimeMS: totalRuntimeMS,
@@ -441,6 +455,7 @@ export function calculateResult(state) {
     }
 
     if (maximumAttempts > 0 && i + 1 >= maximumAttempts) {
+      pushGhost(nextStartMS());
       return withTimeline({
         success: false,
         runtimeMS: totalRuntimeMS,
@@ -457,6 +472,9 @@ export function calculateResult(state) {
     if (scheduleToCloseTimeout > 0 && totalRuntimeMS >= scheduleToCloseTimeout) {
       // Temporal fails the execution at exactly scheduleToCloseTimeout — the
       // pending retry interval doesn't get to "run past" the deadline.
+      // totalRuntimeMS already includes the (would-be) retry interval, so it
+      // marks where the next attempt would have started.
+      pushGhost(totalRuntimeMS);
       return withTimeline({
         success: false,
         runtimeMS: scheduleToCloseTimeout,
