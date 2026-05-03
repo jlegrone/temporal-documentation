@@ -766,6 +766,7 @@ export default function RetrySimulator() {
             value={state.backoffCoefficient}
             min={1}
             max={10}
+            step={0.1}
             updateRetryPolicyParam={updateRetryPolicyParam}
             updateRetryPolicyParamUnit={updateRetryPolicyParamUnit}
           />
