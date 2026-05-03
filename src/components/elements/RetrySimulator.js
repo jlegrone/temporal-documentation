@@ -1,3 +1,4 @@
+// TODO(jlegrone): screenshot this view for the PR description: http://localhost:3000/develop/activity-retry-simulator?scheduleToStartTimeout=0s&scheduleToCloseTimeout=1m&startToCloseTimeout=30s&heartbeatTimeout=0s&backoffCoefficient=2&initialInterval=5s&scheduleTime=0s&maximumAttempts=5&maximumInterval=10m&language=go&retries=fail%3Aafter%3A5s%3Aattempts%3A2%2Csucceed%3Aafter%3A24s
 import Chart from "chart.js/auto";
 import CodeBlock from "@theme/CodeBlock";
 import React, { useState, useEffect, useRef } from "react";
